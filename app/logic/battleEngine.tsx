@@ -1,186 +1,318 @@
-import { drawer, ease, filterType, judge, note, obj, battleRenderData } from "../data/types"
-import { Easing, calcEventColor, calcEventValue, copy, enableFilters, getPos, parseHex} from "../data/utils"
-import { Stage, Container, Sprite, Graphics, Text } from "@pixi/react"
+import { extend } from '@pixi/react'
+import {
+    BloomFilter,
+    ConvolutionFilter,
+    DotFilter,
+    GlitchFilter,
+    GodrayFilter,
+    GrayscaleFilter,
+    MotionBlurFilter,
+    PixelateFilter,
+    RGBSplitFilter,
+} from 'pixi-filters'
 import * as PIXI from 'pixi.js'
-import { DotFilter, BloomFilter, GlitchFilter, GodrayFilter, GrayscaleFilter, MotionBlurFilter, PixelateFilter, ConvolutionFilter, RGBSplitFilter } from 'pixi-filters'
-import { toLang } from "../data/lang"
+import { PixiAssetSprite } from '../components/PixiAssetSprite'
+import { ResponsivePixiApplication } from '../components/ResponsivePixiApplication'
+import type { battleRenderData, drawer, ease, eventValue, filterType, obj } from '../data/types'
+import { Easing, calcEventColor, calcEventValue, enableFilters, getPos, parseHex } from '../data/utils'
+import { resolveObjectBpmAt, type JudgementRecord, type JudgementState, type NoteId } from './battleDomain'
 
-// chart pixi drawer
-const chartDraw = (g:PIXI.Graphics, v:obj, _tl:number) => {
-    let _mc:string = v.mcolor as string
-    let _jc:string = v.jcolor as string
-    let _nc:string = v.ncolor as string
-    let _d:drawer = v.drawer as drawer
-    let _sh:string = v.shape as string
-    let _l:number = v.line as number
-    let _nl:number = v.nline as number
-    g.clear();
-    g.beginFill(parseHex(_mc))
-    g.drawRect(-250+(_l/2), 1-(_l/2), 500, _l)
-    g.drawRect(-250+(_l/2), -25, _l, 50)
-    g.drawRect(250-(_l/2), -25, _l, 50)
-    g.endFill()
-    g.beginFill(parseHex(_jc))
-    g.drawRect(-200+(_l/2), -25, _l, 50)
-    g.endFill()
-    v.notes?.forEach((v2, i2) => {
-        if(v2.judge == 'none'){
-            let _timing:number = (v2.stamp - _tl) / (240/(v.bpm as number))
-            _timing = _timing <= 1 && _timing >= 0 ? Easing(_timing, v.ease as ease) : _timing
-            if(_timing <= 1 && _timing >= -0.1){
-                let _x = -200+450*_timing + _l
-                _d == 'stroke' ? g.lineStyle(_nl, parseHex(_nc)) : g.beginFill(parseHex(_nc))
-                _sh == 'arc' ? g.drawCircle(_x, 0, 25) : g.drawRect(_x-25, -25, 50, 50)
-                _d == 'fill' ? g.endFill() : false
-            }
-        }
-    })
+extend({
+    Container: PIXI.Container,
+    Graphics: PIXI.Graphics,
+    Sprite: PIXI.Sprite,
+    Text: PIXI.Text,
+})
+
+function vectorEventValue(value:eventValue | undefined):[number, number] {
+    return Array.isArray(value) ? value : [0, 0]
 }
 
-// filter 만드는 함수
-const createFilter = (renderData:battleRenderData, timeline:number) => {
-    let _arr:PIXI.Filter[] = []
-    renderData.filters.blur != 0 ? _arr.push(new PIXI.BlurFilter(renderData.filters.blur)) : false
-    renderData.filters.dot != 0 ? _arr.push(new DotFilter(renderData.filters.dot)) : false
-    renderData.filters.motionBlur != 0 ? _arr.push(new MotionBlurFilter([10, 10], renderData.filters.motionBlur*5)) : false
-    renderData.filters.bloom != 0 ? _arr.push(new BloomFilter(renderData.filters.bloom*2)) : false
-    renderData.filters.godray != 0 ? _arr.push(new GodrayFilter({gain:renderData.filters.godray})) : false
-    renderData.filters.convolution != 0 ? _arr.push(new ConvolutionFilter([renderData.filters.convolution, renderData.filters.convolution])) : false
-    let _gr = renderData.filters.glitch * 5
-    let _gopt = {red:[_gr, _gr], blue:[_gr/2, -_gr/2], green:[-_gr, -_gr]}
-    renderData.filters.glitch != 0 ? _arr.push(new GlitchFilter(_gopt)) : false
-    renderData.filters.grayscale != 0 ? _arr.push(new GrayscaleFilter()) : false
-    renderData.filters.noise != 0 ? _arr.push(new PIXI.NoiseFilter(renderData.filters.noise, timeline%1)) : false
-    renderData.filters.pixelate != 0 ? _arr.push(new PixelateFilter(renderData.filters.pixelate*10)) : false
-    let _rr = renderData.filters.rgbsplit * 5
-    renderData.filters.rgbsplit != 0 ? _arr.push(new RGBSplitFilter([_rr, _rr], [_rr/2, -_rr/2], [-_rr, -_rr])) : false
-    return _arr
-}
-
-// 판정 텍스트 업로드 함수
-const InitJudges = (_o:obj, ki:number, timeline:number, stageSize:[number, number]) => {
-    let _idx:number = -1
-    _o.type == 'chart' && _o.visible && _o.notes?.forEach((v2, i2) => {
-        if(v2.judge !== 'none') _idx = i2
-    })
-    if(_idx != -1){
-        let _j:judge = (_o.notes as note[])[_idx].judge
-        let _f:number = _j == 'perfect' ? 0x33ff00 : _j == 'good' ? 0xdddd00 : 0xdd0000
-        return timeline - (_o.notes as note[])[_idx].hit < 0.5 ? <Text key={ki} text={_j.toUpperCase()} style={new PIXI.TextStyle({align:'center', fontFamily:'Impact', fontSize:20, fontWeight:'400', fill:_f, fontStyle:'normal'})}
-        position={getPos(_o.position, stageSize)} rotation={_o.rotate*Math.PI/180} scale={_o.scale} alpha={_o.opacity} pivot={[_o.anchor[0]*5+230, _o.anchor[1]*0.5+50]}/> : <></>
-    } else {
-        return <></>
+function createRenderFrame(renderData: battleRenderData): battleRenderData {
+    return {
+        ...renderData,
+        position: [...renderData.position],
+        filters: { ...renderData.filters },
+        objs: renderData.objs.map(object => ({
+            ...object,
+            position: [...object.position],
+            scale: [...object.scale],
+            anchor: [...object.anchor],
+        })),
     }
 }
 
-// rendering 함수 내보내기
-export const battleEngine = (timeline:number, hits:number[], stageSize:[number, number], renderData:battleRenderData, playing?:boolean) => {
-    let base:battleRenderData = copy(renderData)
+function chartDraw(
+    graphics: PIXI.Graphics,
+    object: obj,
+    objectIndex: number,
+    timeline: number,
+    judgements: JudgementState,
+) {
+    const mainColor = object.mcolor as string
+    const judgementColor = object.jcolor as string
+    const noteColor = object.ncolor as string
+    const drawer = object.drawer as drawer
+    const shape = object.shape as string
+    const line = object.line as number
+    const noteLine = object.nline as number
 
-    // main event 적용
-    base.events.forEach((v, i) => {
-        if(timeline >= v.stamp){
-            if(v.type == 'bgcolor'){base.backgroundColor = calcEventColor(timeline, v.stamp, 60/(v.duration as number), base.backgroundColor, v.value, v.ease)}
-            else if(v.type == 'wiggle'){
-                if (timeline >= v.stamp + (60/(v.duration as number))) return
-                let _rt:number = timeline - v.stamp
-                let _sp:number = 1 / +(v.speed as number);
-                let _st:number = (_rt % _sp) * (1/_sp)
-                let _n:number = Math.round(_rt / (_sp / 10)) % 4
-                let _r:number = _n >= 2 ? -1 : 1
-                let _rs:number = _n % 2 == 0 ? _st : 1 - _st
-                let _sm:number = v.smooth ? 1 - _rt/(60/(v.duration as number)) : 1
-                base.position[1] = base.position[1] + (_rs * _r * _sm * (+v.value/10))
-            } else if(v.type == 'rotate'){base.rotate = calcEventValue(timeline, v.stamp, 60/(v.duration as number), base.rotate, +v.value, v.ease)
-            } else if(v.type == 'scale'){base.scale = calcEventValue(timeline, v.stamp, 60/(v.duration as number), base.scale, +v.value, v.ease)
-            } else if(v.type == 'position'){
-                base.position[0] = calcEventValue(timeline, v.stamp, 60/(v.duration as number), base.position[0], +v.value[0], v.ease)
-                base.position[1] = calcEventValue(timeline, v.stamp, 60/(v.duration as number), base.position[1], +v.value[1], v.ease)
-            } else if(v.type == 'filter'){
-                let _f:filterType = v.filter as filterType
-                if(enableFilters.includes(_f)) return base.filters[_f] = v.value != 0 ? 1 : 0
-                base.filters[_f] = calcEventValue(timeline, v.stamp, 60/(v.duration as number), base.filters[_f], (+v.value)/100, v.ease)
+    graphics.clear()
+    graphics.rect(-250 + line / 2, 1 - line / 2, 500, line).fill(parseHex(mainColor))
+    graphics.rect(-250 + line / 2, -25, line, 50).fill(parseHex(mainColor))
+    graphics.rect(250 - line / 2, -25, line, 50).fill(parseHex(mainColor))
+    graphics.rect(-200 + line / 2, -25, line, 50).fill(parseHex(judgementColor))
+
+    object.notes?.forEach((note, noteIndex) => {
+        const noteId = `${objectIndex}:${noteIndex}` as NoteId
+        if (note.judge !== 'none' || judgements[noteId]) {
+            return
+        }
+
+        let timing = (note.stamp - timeline) / (240 / (object.bpm as number))
+        timing = timing <= 1 && timing >= 0 ? Easing(timing, object.ease as ease) : timing
+        if (timing > 1 || timing < -0.1) {
+            return
+        }
+
+        const x = -200 + 450 * timing + line
+        if (shape === 'arc') {
+            graphics.circle(x, 0, 25)
+        } else {
+            graphics.rect(x - 25, -25, 50, 50)
+        }
+
+        if (drawer === 'stroke') {
+            graphics.stroke({ width: noteLine, color: parseHex(noteColor) })
+        } else {
+            graphics.fill(parseHex(noteColor))
+        }
+    })
+}
+
+function createFilters(renderData: battleRenderData, timeline: number) {
+    const filters: PIXI.Filter[] = []
+    const values = renderData.filters
+
+    if (values.blur !== 0) filters.push(new PIXI.BlurFilter({ strength: values.blur }))
+    if (values.dot !== 0) filters.push(new DotFilter({ scale: values.dot }))
+    if (values.motionBlur !== 0) {
+        const kernelSize = Math.min(15, Math.max(5, Math.round(values.motionBlur * 5) | 1))
+        filters.push(new MotionBlurFilter({ velocity: [10, 10], kernelSize }))
+    }
+    if (values.bloom !== 0) filters.push(new BloomFilter({ strength: values.bloom * 2 }))
+    if (values.godray !== 0) filters.push(new GodrayFilter({ gain: values.godray }))
+    if (values.convolution !== 0) {
+        filters.push(new ConvolutionFilter({
+            matrix: new Float32Array([
+                0, -values.convolution, 0,
+                -values.convolution, 1 + values.convolution * 4, -values.convolution,
+                0, -values.convolution, 0,
+            ]),
+        }))
+    }
+    if (values.glitch !== 0) {
+        const amount = values.glitch * 5
+        filters.push(new GlitchFilter({
+            red: [amount, amount],
+            green: [-amount, -amount],
+            blue: [amount / 2, -amount / 2],
+        }))
+    }
+    if (values.grayscale !== 0) filters.push(new GrayscaleFilter())
+    if (values.noise !== 0) filters.push(new PIXI.NoiseFilter({ noise: values.noise, seed: timeline % 1 }))
+    if (values.pixelate !== 0) filters.push(new PixelateFilter(values.pixelate * 10))
+    if (values.rgbsplit !== 0) {
+        const amount = values.rgbsplit * 5
+        filters.push(new RGBSplitFilter({
+            red: [amount, amount],
+            green: [amount / 2, -amount / 2],
+            blue: [-amount, -amount],
+        }))
+    }
+
+    return filters
+}
+
+function latestJudgementForObject(objectIndex: number, judgements: JudgementState) {
+    const prefix = `${objectIndex}:`
+    return Object.entries(judgements).reduce<JudgementRecord | undefined>((latest, [noteId, record]) => {
+        if (!noteId.startsWith(prefix) || (latest && latest.hit >= record.hit)) {
+            return latest
+        }
+        return record
+    }, undefined)
+}
+
+function renderJudgement(
+    object: obj,
+    objectIndex: number,
+    timeline: number,
+    stageSize: [number, number],
+    judgements: JudgementState,
+) {
+    if (object.type !== 'chart' || !object.visible) {
+        return null
+    }
+
+    const judgement = latestJudgementForObject(objectIndex, judgements)
+    if (!judgement || timeline - judgement.hit >= 0.5) {
+        return null
+    }
+
+    const fill = judgement.judge === 'perfect'
+        ? 0x33ff00
+        : judgement.judge === 'good'
+            ? 0xdddd00
+            : 0xdd0000
+    const position = getPos(object.position, stageSize)
+
+    return <pixiText
+        key={objectIndex}
+        text={judgement.judge.toUpperCase()}
+        style={new PIXI.TextStyle({
+            align: 'center',
+            fontFamily: 'Impact',
+            fontSize: 20,
+            fontWeight: '400',
+            fill,
+            fontStyle: 'normal',
+        })}
+        x={position[0]}
+        y={position[1]}
+        rotation={object.rotate * Math.PI / 180}
+        scale={{ x: object.scale[0], y: object.scale[1] }}
+        alpha={object.opacity}
+        pivot={{ x: object.anchor[0] * 5 + 230, y: object.anchor[1] * 0.5 + 50 }}
+    />
+}
+
+function applyEvents(base: battleRenderData, timeline: number) {
+    base.events.forEach(event => {
+        if (timeline < event.stamp) {
+            return
+        }
+
+        if (event.type === 'bgcolor') {
+            base.backgroundColor = calcEventColor(timeline, event.stamp, 60 / (event.duration as number), base.backgroundColor, String(event.value ?? base.backgroundColor), event.ease)
+        } else if (event.type === 'wiggle') {
+            if (timeline >= event.stamp + 60 / (event.duration as number)) return
+            const elapsed = timeline - event.stamp
+            const speed = 1 / Number(event.speed)
+            const step = (elapsed % speed) * (1 / speed)
+            const phase = Math.round(elapsed / (speed / 10)) % 4
+            const direction = phase >= 2 ? -1 : 1
+            const offset = phase % 2 === 0 ? step : 1 - step
+            const smoothing = event.smooth ? 1 - elapsed / (60 / (event.duration as number)) : 1
+            base.position[1] += offset * direction * smoothing * (Number(event.value) / 10)
+        } else if (event.type === 'rotate') {
+            base.rotate = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.rotate, Number(event.value), event.ease)
+        } else if (event.type === 'scale') {
+            base.scale = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.scale, Number(event.value), event.ease)
+        } else if (event.type === 'position') {
+            const value = vectorEventValue(event.value)
+            base.position[0] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.position[0], Number(value[0]), event.ease)
+            base.position[1] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.position[1], Number(value[1]), event.ease)
+        } else if (event.type === 'filter') {
+            const filter = event.filter as filterType
+            if (enableFilters.includes(filter)) {
+                base.filters[filter] = event.value !== 0 ? 1 : 0
+            } else {
+                base.filters[filter] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.filters[filter], Number(event.value) / 100, event.ease)
             }
         }
     })
 
-    // objects event 적용
-    base.objs.forEach((_v, _i) => {
-        _v.events.forEach((_v2, _i2) => {
-            if(timeline >= _v2.stamp){
-                if(_v2.type == 'opacity' || _v2.type == 'rotate' || _v2.type == 'bpm' || _v2.type == 'line' || _v2.type == 'nline')
-                {base.objs[_i][_v2.type] = calcEventValue(timeline, _v2.stamp, 60/(_v2.duration as number), base.objs[_i][_v2.type] as number, +(_v2.value), _v2.ease)}
-                else if(_v2.type == 'position' || _v2.type == 'anchor' || _v2.type == 'scale')
-                {
-                    let _m = base.objs[_i][_v2.type]
-                    base.objs[_i][_v2.type][0] = calcEventValue(timeline, _v2.stamp, 60/(_v2.duration as number), _m[0] as number, +(_v2.value[0]), _v2.ease)
-                    base.objs[_i][_v2.type][1] = calcEventValue(timeline, _v2.stamp, 60/(_v2.duration as number), _m[1] as number, +(_v2.value[1]), _v2.ease)
-                }
-                else if(_v2.type == 'mcolor' || _v2.type == 'jcolor' || _v2.type == 'ncolor'){
-                    {base.objs[_i][_v2.type] = calcEventColor(timeline, _v2.stamp, 60/(_v2.duration as number), base.objs[_i][_v2.type] as string, _v2.value, _v2.ease)}
-                }
-                else if(_v2.type == 'visible'){base.objs[_i].visible = _v2.value}
-                else if(_v2.type == 'ease'){base.objs[_i].ease = _v2.value}
-                else if(_v2.type == 'drawer'){base.objs[_i].drawer = _v2.value}
-                else if(_v2.type == 'shape'){base.objs[_i].shape = _v2.value}
-                else if(_v2.type == 'change'){base.objs[_i].src = _v2.value}
+    base.objs.forEach(object => {
+        const effectiveBpm = object.type === 'chart' ? resolveObjectBpmAt(object, timeline) : undefined
+        object.events.forEach(event => {
+            if (timeline < event.stamp) {
+                return
             }
+
+            if (event.type === 'bpm') {
+                return
+            }
+            if (event.type === 'opacity' || event.type === 'rotate' || event.type === 'line' || event.type === 'nline') {
+                object[event.type] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), object[event.type] as number, Number(event.value), event.ease)
+            } else if (event.type === 'position' || event.type === 'anchor' || event.type === 'scale') {
+                const current = object[event.type]
+                const value = vectorEventValue(event.value)
+                current[0] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), current[0], Number(value[0]), event.ease)
+                current[1] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), current[1], Number(value[1]), event.ease)
+            } else if (event.type === 'mcolor' || event.type === 'jcolor' || event.type === 'ncolor') {
+                object[event.type] = calcEventColor(timeline, event.stamp, 60 / (event.duration as number), object[event.type] as string, String(event.value ?? object[event.type]), event.ease)
+            } else if (event.type === 'visible') object.visible = Boolean(event.value)
+            else if (event.type === 'ease' && typeof event.value === 'string') object.ease = event.value as ease
+            else if (event.type === 'drawer' && typeof event.value === 'string') object.drawer = event.value as drawer
+            else if (event.type === 'shape' && typeof event.value === 'string') object.shape = event.value
+            else if (event.type === 'change' && typeof event.value === 'string') object.src = event.value
         })
+        if (effectiveBpm !== undefined) object.bpm = effectiveBpm
     })
+}
 
-    let _noteArr:{stamp:number;hit:number;judge:judge;pointer:number[];bpmd:number;}[] = []
-    base.objs.forEach((v, i) => {
-        if(v.type == 'chart'){
-            v.notes?.forEach((v2, i2) => {
-                _noteArr.push({stamp:v2.stamp, hit:v2.hit, judge:v2.judge, pointer:[i, i2], bpmd:60/(v.bpm as number)})
-            })
-        }
-    })
-    _noteArr.sort((_a, _b) => _a.stamp - _b.stamp)
+export function battleEngine(
+    timeline: number,
+    stageSize: [number, number],
+    renderData: battleRenderData,
+    judgements: JudgementState = {},
+    playing = false,
+    surfaceLabel = 'battle',
+) {
+    const base = createRenderFrame(renderData)
+    applyEvents(base, timeline)
 
-    let _h:number[] = copy(hits)
-    _h.sort((a, b) => b - a)
-    _noteArr.forEach((v, i) => {
-        let _of:number = 0.4/v.bpmd
-        _of = 1 + ((_of - 1)/2)
-        let _gj:number = (v.bpmd*3/5)*_of
-        let _pj:number = (v.bpmd*1/5)*_of
-        let _mj:number = (v.bpmd)*_of
-        let _delIdx:number = -1
-        let _cd = timeline - v.stamp >= _gj
-        _h.forEach((v2, i2) => {
-            let _j:number = Math.abs(v2 - v.stamp)
-            if(_j <= _pj){
-                (base.objs[v.pointer[0]].notes as note[])[v.pointer[1]].judge = 'perfect';
-            } else if(_j < _gj){
-                (base.objs[v.pointer[0]].notes as note[])[v.pointer[1]].judge = 'good';
-            } else if(_j <= _mj){
-                (base.objs[v.pointer[0]].notes as note[])[v.pointer[1]].judge = 'miss'
-            }
-            if(_j <= _mj){
-                (base.objs[v.pointer[0]].notes as note[])[v.pointer[1]].hit = v2;
-                _delIdx = i2
-            }
-        })
-        if(_delIdx != -1){
-            _h.splice(_delIdx, 1)
-        } else if(_cd){
-            (base.objs[v.pointer[0]].notes as note[])[v.pointer[1]].judge = 'miss';
-            (base.objs[v.pointer[0]].notes as note[])[v.pointer[1]].hit = v.stamp + _gj;
-        }
-    })
-
-    const globalSize = Math.max(stageSize[0], stageSize[1])/1000
-    return <Stage width={stageSize[0]} height={stageSize[1]} options={{backgroundColor:parseHex(base.backgroundColor)}}>
-        <Sprite image={"assets/object/square/square1.png"} width={stageSize[0]} height={stageSize[1]} tint={parseHex(base.backgroundColor)}></Sprite>
-        <Container filters={createFilter(base, timeline) as PIXI.Filter[]} pivot={[base.position[0]/100*stageSize[0], base.position[1]/100*stageSize[1]]} x={stageSize[0]/2} y={stageSize[1]/2} scale={base.scale} rotation={base.rotate*Math.PI/180}>
-            {base.objs.map((v, i) => (
-                v.type == 'sprite' && v.visible ? <Sprite key={i} image={v.src || "assets"} position={getPos(v.position, stageSize)} rotation={v.rotate*Math.PI/180} scale={[v.scale[0]*globalSize, v.scale[1]*globalSize]} alpha={v.opacity} anchor={v.anchor.map(v => (v+50)/100) as [number]}></Sprite>:
-                v.type == 'chart' && v.visible && <Graphics key={i} draw={g => chartDraw(g, v, timeline)} position={getPos(v.position, stageSize)} rotation={v.rotate*Math.PI/180} scale={[v.scale[0]*globalSize, v.scale[1]*globalSize]} alpha={v.opacity} pivot={[v.anchor[0]*5, v.anchor[1]*0.5]}/>
+    const globalSize = Math.max(stageSize[0], stageSize[1]) / 1000
+    return <ResponsivePixiApplication
+        width={stageSize[0]}
+        height={stageSize[1]}
+        backgroundColor={base.backgroundColor}
+        label={surfaceLabel}
+    >
+        <pixiGraphics draw={graphics => {
+            graphics.clear().rect(0, 0, stageSize[0], stageSize[1]).fill(parseHex(base.backgroundColor))
+        }}/>
+        <pixiContainer
+            filters={createFilters(base, timeline)}
+            pivot={{ x: base.position[0] / 100 * stageSize[0], y: base.position[1] / 100 * stageSize[1] }}
+            x={stageSize[0] / 2}
+            y={stageSize[1] / 2}
+            scale={base.scale}
+            rotation={base.rotate * Math.PI / 180}
+        >
+            {base.objs.map((object, objectIndex) => {
+                const objectPosition = getPos(object.position, stageSize)
+                const anchor = { x: (object.anchor[0] + 50) / 100, y: (object.anchor[1] + 50) / 100 }
+                if (object.type === 'sprite' && object.visible) {
+                    return <PixiAssetSprite
+                        key={objectIndex}
+                        src={object.src || '/assets/object/white.png'}
+                        x={objectPosition[0]}
+                        y={objectPosition[1]}
+                        rotation={object.rotate * Math.PI / 180}
+                        scale={{ x: object.scale[0] * globalSize, y: object.scale[1] * globalSize }}
+                        alpha={object.opacity}
+                        anchor={anchor}
+                    />
+                }
+                if (object.type === 'chart' && object.visible) {
+                    return <pixiGraphics
+                        key={objectIndex}
+                        draw={graphics => chartDraw(graphics, object, objectIndex, timeline, judgements)}
+                        x={objectPosition[0]}
+                        y={objectPosition[1]}
+                        rotation={object.rotate * Math.PI / 180}
+                        scale={{ x: object.scale[0] * globalSize, y: object.scale[1] * globalSize }}
+                        alpha={object.opacity}
+                        pivot={{ x: object.anchor[0] * 5, y: object.anchor[1] * 0.5 }}
+                    />
+                }
+                return null
+            })}
+            {playing && base.objs.map((object, objectIndex) => (
+                renderJudgement(object, objectIndex, timeline, stageSize, judgements)
             ))}
-            {playing && base.objs.map((v, i) => (
-                InitJudges(v, i, timeline, stageSize)
-            ))}
-        </Container>
-    </Stage>
+        </pixiContainer>
+    </ResponsivePixiApplication>
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useEffect, useState } from "react"
+import { createContext, useEffect, useState, type Dispatch, type SetStateAction } from "react"
 import MainMenu from './scenes/MainMenu'
 import Intro from './scenes/Intro'
 import Settings from './scenes/Settings'
@@ -8,10 +8,43 @@ import Credits from './scenes/Credits'
 import Battle from './scenes/Battle'
 import Explore from './scenes/Explore'
 import Selector from './scenes/Selector'
-import { env } from "./data/types"
+import type { camera, player } from "./data/types"
+import type { LevelCode } from './data/levelManifest'
+import { parsePersistedEnv, type PersistedEnv } from './logic/persistedEnv'
+
+type GlobalConfig = {
+    startScene:string
+    defaultLang:string
+    testBattleCode:LevelCode
+    defaultEnv:PersistedEnv
+    startExploreCode:string
+    defaultPlayer:player
+    defaultCamera:camera
+    defaultGravity:number
+    defaultGround:number
+    black:string
+    white:string
+    mapList:string[]
+    levelList:LevelCode[][]
+}
+
+type GlobalContextValue = {
+    scene:string
+    setScene:Dispatch<SetStateAction<string>>
+    lang:string
+    setLang:Dispatch<SetStateAction<string>>
+    battleCode:string
+    setBattleCode:Dispatch<SetStateAction<string>>
+    exploreCode:string
+    setExploreCode:Dispatch<SetStateAction<string>>
+    afterBattleScene:string
+    setAfterBattleScene:Dispatch<SetStateAction<string>>
+    env:PersistedEnv
+    setEnv:Dispatch<SetStateAction<PersistedEnv>>
+}
 
 // 글로벌 설정
-export const globalConfig:{[key:string]:any} = {
+export const globalConfig:GlobalConfig = {
     startScene:'MainMenu',
     defaultLang:'en-US',
     testBattleCode:'test',
@@ -35,7 +68,7 @@ export const globalConfig:{[key:string]:any} = {
         width:100, height:120,
         opacity:1,
         anchor:[0.5, 0.5],
-        src:'assets/character/test/test1.png',
+        src:'/assets/object/glowing_circle_01.png',
         jumpSrc:'',
         sneakSrc:'',
         sneakWalkSrc:[''],
@@ -69,27 +102,57 @@ export const globalConfig:{[key:string]:any} = {
     ],
 }
 
-export const globalContext = createContext<any>({})
+const ignoreStateUpdate = (_value:unknown) => undefined
+
+export const globalContext = createContext<GlobalContextValue>({
+    scene:globalConfig.startScene,
+    setScene:ignoreStateUpdate,
+    lang:globalConfig.defaultLang,
+    setLang:ignoreStateUpdate,
+    battleCode:globalConfig.testBattleCode,
+    setBattleCode:ignoreStateUpdate,
+    exploreCode:globalConfig.startExploreCode,
+    setExploreCode:ignoreStateUpdate,
+    afterBattleScene:globalConfig.startScene,
+    setAfterBattleScene:ignoreStateUpdate,
+    env:globalConfig.defaultEnv,
+    setEnv:ignoreStateUpdate,
+})
 
 export default function Index(){
     // 글로벌 state 변수 선언
-    const [lang, setLang] = useState<string>(globalConfig['defaultLang'])
-    const [scene, setScene] = useState<string>(globalConfig['startScene'])
-    const [battleCode, setBattleCode] = useState<string>(globalConfig['testBattleCode'])
-    const [afterBattleScene, setAfterBattleScene] = useState<string>(globalConfig['startScene'])
-    const [exploreCode, setExploreCode] = useState<string>(globalConfig['startExploreCode'])
-    const [env, setEnv] = useState<env>(globalConfig['defaultEnv'])
+    const [lang, setLang] = useState<string>(globalConfig.defaultLang)
+    const [scene, setScene] = useState<string>(globalConfig.startScene)
+    const [battleCode, setBattleCode] = useState<string>(globalConfig.testBattleCode)
+    const [afterBattleScene, setAfterBattleScene] = useState<string>(globalConfig.startScene)
+    const [exploreCode, setExploreCode] = useState<string>(globalConfig.startExploreCode)
+    const [env, setEnv] = useState<PersistedEnv>(globalConfig.defaultEnv)
     const [load, setLoad] = useState<boolean>(false)
 
     useEffect(() => {
-        setLang(navigator.language ?? globalConfig['defaultLang'])
-        setLoad(true)
+        setLang(navigator.language ?? globalConfig.defaultLang)
 
-        if(localStorage.getItem('env')){
-            setEnv(JSON.parse(localStorage.getItem('env')!) as env)
-        } else {
-            localStorage.setItem('env', JSON.stringify(globalConfig['defaultEnv']))
+        let nextEnv = globalConfig.defaultEnv
+        try {
+            const persistedEnv = parsePersistedEnv(localStorage.getItem('env'), globalConfig.defaultEnv)
+            nextEnv = persistedEnv.value
+            if (persistedEnv.repaired) localStorage.setItem('env', JSON.stringify(persistedEnv.value))
+        } catch {
+            nextEnv = globalConfig.defaultEnv
         }
+        setEnv(nextEnv)
+
+        const search = new URLSearchParams(window.location.search)
+        const requestedScene = search.get('scene')
+        if (requestedScene === 'Battle') {
+            setBattleCode(search.get('battle') ?? 'test')
+            setAfterBattleScene('Selector')
+            setScene('Battle')
+        } else if (requestedScene === 'Explore') {
+            setExploreCode(search.get('explore') ?? 'preview')
+            setScene('Explore')
+        }
+        setLoad(true)
     }, [])
 
     return <globalContext.Provider value={{
@@ -109,7 +172,7 @@ export default function Index(){
             scene == 'Settings' ? <Settings /> :
             scene == 'Credits' ? <Credits /> :
             scene == 'Battle' ? <Battle /> :
-            scene == 'Explore' ? <Explore /> :
+            scene == 'Explore' ? <Explore key={exploreCode} /> :
             scene == 'Selector' ? <Selector /> :
             <></>)
         }

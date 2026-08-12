@@ -1,36 +1,110 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# MuseMare
 
-## Getting Started
+MuseMare is an experimental browser rhythm game with battle-level and exploration-map JSON editors. It uses the Next.js App Router, React, PixiJS, Vitest, and Playwright.
 
-First, run the development server:
+## Routes
+
+- `/` — main menu, intro fallback, availability-aware selector, battles, settings, and credits.
+- `/editor` — battle-level JSON editor with audio transport and a live Pixi preview.
+- `/mapeditor` — exploration-map JSON editor with a live Pixi preview.
+
+## Playable Path
+
+A fresh browser profile can reach the repository’s playable ending through visible UI only:
+
+1. Select `New Game`.
+2. Select `Continue` on the intro fallback.
+3. Select `Play Ending — prerequisites unavailable`.
+
+The selector exposes this existing ending as a standalone playable level because every configured prerequisite battle lacks its matching recording. It does not write completion for those unavailable levels and does not claim that the story prerequisites were completed.
+
+The selector still exposes each map section so the unavailable entries and their original track identities can be inspected. Unavailable entries are disabled and never create an audio element or start a battle.
+
+## Level Availability
+
+- `Halv — Romanesque`, `Exyl — MOAI`, and `t+pazolite — Dogbite` retain their embedded event/object/note payloads and provenance, but remain explicitly unavailable because matching legally usable recordings are not present.
+- No replacement song is assigned to those three charts.
+- `ending` retains `/assets/song/icyxis_true_ending.mp3` and is playable.
+
+`app/data/level.ts` contains the four embedded level payloads. `app/data/levelManifest.ts` separately records song availability, track identity, and provenance. Integrity tests separately bind every level’s song and sprite source mapping so the normalized payload hashes cannot hide asset remapping.
+
+## Requirements
+
+- Node.js `22.22.0` for the validated workflow; `package.json` supports Node `>=22.12 <23`.
+- npm `11.6.2`.
+- Local Playwright Chromium for local smoke tests unless `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` points to a compatible executable.
+
+CI runs on the Playwright `v1.62.1-noble` image pinned to the amd64 manifest digest `sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac`. CI does not download a browser at runtime. Checkout and setup-node actions are also pinned to immutable commit SHAs, and workflow permissions are limited to `contents: read`.
+
+## Development
 
 ```bash
+npm install --global npm@11.6.2
+node --version
+npm --version
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`. The editors are available at `/editor` and `/mapeditor`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Controls
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+### Battle editor
 
-## Learn More
+- `Space` — play or pause.
+- `Home` / `End` — seek to the beginning or endpoint.
+- Mouse wheel — pan the timeline; `Alt` + wheel zooms.
+- Drag or click the timeline ruler to seek; hold `Shift` while dragging to snap.
+- `W` — add a note to the selected chart object.
+- `E` — add an event to the selected main track or object.
+- `Delete` — remove the focused object, event, or note.
+- `Ctrl+C`, `Ctrl+X`, `Ctrl+V` — copy, cut, and paste events.
 
-To learn more about Next.js, take a look at the following resources:
+Every discontinuous seek starts a new input/judgement epoch. Pending hits, judgement refs, and rendered judgements are cleared for Home, End, ruler seeks, imports, song/offset changes, and endpoint rewind.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Map editor
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+- `A` / `D` move the preview player, `Space` jumps, `Shift` runs, and `Control` sneaks when focus is outside editable controls.
+- Select a sprite and drag the canvas to move it in world space.
+- Select `Set Size`, then drag in either direction to resize it in world units.
 
-## Deploy on Vercel
+Pointer coordinates are inverted through the same camera translation, rotation, and `camera.scale * globalSize` transform used by the preview. Pointer capture, cancel, visibility, blur, and unmount cleanup prevent stuck move/resize interactions.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Asset Integrity
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+`assets.sha256` contains one path-sorted SHA-256 entry for every file under `public/assets/` (53 files in the current tree). Integrity tests fail when a path is added or removed, when bytes change, when an entry is duplicated or unsorted, or when a listed digest does not match.
+
+Regeneration is manual and explicit:
+
+```bash
+npm run assets:manifest
+git diff -- assets.sha256
+```
+
+Tests and CI never regenerate the manifest automatically. Review every manifest diff together with the corresponding asset change.
+
+## Verification
+
+From a clean dependency state with Node `22.22.0` and npm `11.6.2`:
+
+```bash
+npm ci
+npm ci --dry-run --offline
+npm ls --all
+npm run typecheck
+npm run lint
+npm run test:unit
+npm run test:integrity
+npm audit --audit-level=high
+npm run build
+npx playwright install chromium   # local machine only; CI uses the pinned container
+npm run smoke
+git diff --check
+```
+
+`npm run smoke` requires the production build and starts the standalone server. The suite covers fresh-storage navigation into the playable ending with advancing audio, unavailable entries, transformed map drag/resize behavior, editor seek/import behavior, runtime failure recovery, viewport/backing-size synchronization, and browser decoding of tracked image/audio assets.
+
+On Linux ARM64, npm `11.6.2` may print `@img/sharp-wasm32` and `@emnapi/runtime` as `extraneous` during `npm ls --all` while exiting successfully. A separate clean project containing only `sharp@0.35.3` reproduces the same optional-package report. The MuseMare lock contains the Sharp optional edges and does not add those packages as direct dependencies; required `UNMET DEPENDENCY`, `ELSPROBLEMS`, or a nonzero exit remains a failure.
+
+The missing intro video is represented by a visible local-image fallback. `MuseMare Setup.exe` is a legacy tracked installer artifact; the web build and CI do not execute it.

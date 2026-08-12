@@ -2,43 +2,45 @@
   "name": "musemare",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "npm@11.6.2",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "start:standalone": "node scripts/start-standalone.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "npm run test:unit && npm run test:integrity",
+    "test:unit": "vitest run --config vitest.config.mts",
+    "test:integrity": "vitest run --config vitest.integrity.config.mts",
+    "test:e2e": "playwright test",
+    "smoke": "playwright test",
+    "assets:manifest": "node scripts/regenerate-asset-manifest.mjs",
+    "audit": "npm audit --audit-level=high",
+    "check": "npm run typecheck && npm run lint && npm run test:unit && npm run test:integrity && npm run audit && npm run build && npm run smoke"
   },
   "dependencies": {
-    "@pixi/react": "^7.1.1",
-    "@types/node": "20.19.29",
-    "@types/react": "18.3.31",
-    "@types/react-dom": "18.3.7",
-    "autoprefixer": "10.5.4",
-    "eslint": "9.39.5",
-    "eslint-config-next": "15.5.22",
-    "howler": "^2.2.4",
-    "next": "15.5.22",
-    "pixi-filters": "^5.2.1",
-    "pixi.js": "^7.3.1",
-    "postcss": "8.5.23",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "remove": "^0.1.5",
-    "tailwindcss": "3.4.19",
-    "typescript": "5.9.3",
-    "use-legacy-state": "^1.0.0",
-    "usehooks-ts": "^3.1.1"
+    "@pixi/react": "8.0.5",
+    "next": "16.3.0",
+    "pixi-filters": "6.1.5",
+    "pixi.js": "8.19.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "sass": "1.102.0"
+    "@playwright/test": "1.62.1",
+    "@types/node": "22.18.11",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0",
+    "sass": "1.102.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
   },
-  "main": "index.js",
-  "repository": "https://github.com/MswTester/musemare",
-  "license": "MIT",
-  "overrides": {
-    "brace-expansion": "5.0.8",
-    "minimatch": "10.2.6",
-    "postcss": "8.5.23",
-    "sharp": "0.35.3"
-  }
+  "repository": "https://github.com/eunhhu/musemare",
+  "license": "MIT"
 }

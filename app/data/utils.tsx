@@ -1,5 +1,5 @@
 import { FC } from "react";
-import { battleRenderData, drawer, ease, EmptyProps, level, Msprite, obj, player, Rsprite } from "./types";
+import { battleRenderData, ease, EmptyProps, level, Msprite, player, Rsprite } from "./types";
 
 export function isInRange(me:number, range:number, tar:number){
     return tar - range < me && me < tar + range
@@ -43,7 +43,7 @@ function easeInOutBack(x: number): number {
 }
 
 export function hexToRgb(hex:string):number[] {
-    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result ? [
         parseInt(result[1], 16),
         parseInt(result[2], 16),
@@ -52,16 +52,12 @@ export function hexToRgb(hex:string):number[] {
 }
 
 export function componentToHex(c:number):string {
-    var hex = c.toString(16);
+    const hex = c.toString(16);
     return hex.length == 1 ? "0" + hex : hex;
 }
 
 export function rgbToHex(r:number, g:number, b:number):string {
     return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b);
-}
-
-export function copy(data:any):any{
-    return JSON.parse(JSON.stringify(data))
 }
 
 export function Easing(n:number, ease:ease):number{
@@ -97,7 +93,7 @@ export function Easing(n:number, ease:ease):number{
 export function calcEventValue(timeline:number, stamp:number, duration:number, start:number, end:number, ease?:ease){
     if(timeline >= stamp + +(duration)){return end}
     else {
-        let _per:number = Easing((timeline - stamp) / +(duration), ease || 'linear')
+        const _per:number = Easing((timeline - stamp) / +(duration), ease || 'linear')
         return start + _per*(end - start)
     }
 }
@@ -105,18 +101,18 @@ export function calcEventValue(timeline:number, stamp:number, duration:number, s
 export function calcEventColor(timeline:number, stamp:number, duration:number, start:string, end:string, ease?:ease){
     if(timeline >= stamp + +(duration)){return end}
     else {
-        let _per:number = Easing((timeline - stamp) / +(duration), ease || 'linear')
-        let _bs = hexToRgb(start)
-        let _nw = hexToRgb(end);
-        let _rs = _bs.map((_v, _i) => {
+        const _per:number = Easing((timeline - stamp) / +(duration), ease || 'linear')
+        const _bs = hexToRgb(start)
+        const _nw = hexToRgb(end);
+        const _rs = _bs.map((_v, _i) => {
             return _v + Math.round(_per * (_nw[_i] - _v))
         })
         return rgbToHex(_rs[0], _rs[1], _rs[2])
     }
 }
 
-export function getPos(_pos:[number, number], _stage:[number, number]):[number]{
-    return _pos.map((v:number, i:number) => (v-50)/100*_stage[i]) as [number]
+export function getPos(_pos:[number, number], _stage:[number, number]):[number, number]{
+    return _pos.map((v:number, i:number) => (v-50)/100*_stage[i]) as [number, number]
 }
 
 export function parseHex(hex:string){
@@ -169,10 +165,14 @@ export function checkCollision(sp1:Msprite, sp2:Msprite):boolean{
 }
 
 export function initCollidedPosition(_me: Msprite, _sprites: Msprite[]): Msprite {
-    let _m: Msprite = copy(_me);
-    let _c: Msprite[] = copy(_sprites);
-    let _colcond: boolean = !_c.map(v => v.isCollision && checkCollision(_m, v)).includes(true)
-    _c.forEach((_sp: Msprite, _i: number) => {
+    const _m: Msprite = {
+        ..._me,
+        position:[..._me.position],
+        dposition:[..._me.dposition],
+    };
+    const _c = _sprites;
+    const _colcond: boolean = !_c.map(v => v.isCollision && checkCollision(_m, v)).includes(true)
+    _c.forEach((_sp: Msprite) => {
         if (_sp.isCollision) {
             if(checkCollisionWithPos([_m.position[0] + _m.dposition[0], _m.position[1]], _m, _sp)) {
                 if (_m.dposition[0] > 0) {
@@ -195,7 +195,7 @@ export function initCollidedPosition(_me: Msprite, _sprites: Msprite[]): Msprite
             }
         }
     })
-    if(!_c.map((_sp: Msprite, _i: number) => {
+    if(!_c.map((_sp: Msprite) => {
         if (_sp.isCollision) {
             if(checkCollisionWithPos([_m.position[0], _m.position[1]+1], _m, _sp)){
                 return false

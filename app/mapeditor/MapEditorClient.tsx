@@ -1,135 +1,137 @@
 'use client'
 
-import { use, useContext, useEffect, useState } from "react"
-import { Msprite, camera, env, event, eventName, exevent, map, mevent, player, playerParams, text } from "../data/types"
+import {
+    useCallback,
+    useContext,
+    useEffect,
+    useEffectEvent,
+    useRef,
+    useState,
+    type ChangeEvent,
+    type Dispatch,
+    type MutableRefObject,
+    type SetStateAction,
+} from "react"
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import type { Msprite, camera, env, exevent, map, mevent, player, text } from "../data/types"
 import { globalConfig, globalContext } from "../main"
-import { useInterval, useWindowSize } from "usehooks-ts"
 import { exRender, execute } from "../logic/exploreEngine"
-import { MsArrToRsArr, copy } from "../data/utils"
-import { defaultConfig } from "next/dist/server/config-shared"
+import { MsArrToRsArr } from "../data/utils"
+import { useFixedStepAnimation } from '../hooks/useFixedStepAnimation'
+import { useHeldKeys } from '../hooks/useHeldKeys'
+import { useWindowSize } from "../hooks/useWindowSize"
+import { clientPointToWorld, normalizeDragRectangle } from '../logic/mapEditorDomain'
+
+const editorEnv:env = {keys:{
+    playerLeft:'KeyA',
+    playerRight:'KeyD',
+    playerJump:'Space',
+    playerRun:'ShiftLeft',
+    playerSneak:'ControlLeft',
+    interaction:'KeyF',
+    escape:'Escape',
+}}
+
+function useSynchronizedState<T>(initialValue:T):[T, Dispatch<SetStateAction<T>>, MutableRefObject<T>] {
+    const [value, setValueState] = useState(initialValue)
+    const valueRef = useRef(value)
+    const setValue = useCallback<Dispatch<SetStateAction<T>>>((nextValue) => {
+        const resolved = typeof nextValue === 'function'
+            ? (nextValue as (current:T) => T)(valueRef.current)
+            : nextValue
+        valueRef.current = resolved
+        setValueState(resolved)
+    }, [])
+    return [value, setValue, valueRef]
+}
 
 export default function Page(){
     const { width, height } = useWindowSize()
-    const {lang, setLang} = useContext(globalContext)
-    const [env, setEnv] = useState<env>({keys:{
-        playerLeft:'KeyA',
-        playerRight:'KeyD',
-        playerJump:'Space',
-        playerRun:'ShiftLeft',
-        playerSneak:'ControlLeft',
-        interaction:'KeyF',
-        escape:'Escape',
-    }})
+    const {lang} = useContext(globalContext)
     const [focusing, setFocusing] = useState<number>(-1)
     const [evText, setEvText] = useState<string>('')
     const [sizing, setSizing] = useState<boolean>(false)
-    const [mouseStartPoint, setMouseStartPoint] = useState<[number, number]>([0, 0])
-    const [mouseOffsetPoint, setMouseOffsetPoint] = useState<[number, number]>([0, 0])
-    const [isMouseDown, setIsMouseDown] = useState<boolean>(false)
     const [isEventMapOpen, setIsEventMapOpen] = useState<boolean>(false)
     const [focusingEvent, setFocusingEvent] = useState<number>(-1)
 
-    const [start, setStart] = useState<boolean>(false)
-    const [inputs, setInputs] = useState<string[]>([])
-    const [activeEvents, setActiveEvents] = useState<exevent[]>([])
-    const [sprites, setSprites] = useState<Msprite[]>([])
+    const [_activeEvents, setActiveEvents, activeEventsRef] = useSynchronizedState<exevent[]>([])
+    const [sprites, setSprites, spritesRef] = useSynchronizedState<Msprite[]>([])
     const [texts, setTexts] = useState<text[]>([])
     const [gravity, setGravity] = useState<number>(globalConfig['defaultGravity'])
     const [ground, setGround] = useState<number>(globalConfig['defaultGround'])
-    const [canControl, setCanControl] = useState<boolean>(true)
-    const [player, setPlayer] = useState<player>(globalConfig['defaultPlayer'])
-    const [camera, setCamera] = useState<camera>(globalConfig['defaultCamera'])
+    const [player, setPlayer, playerRef] = useSynchronizedState<player>(globalConfig['defaultPlayer'])
+    const [camera, setCamera, cameraRef] = useSynchronizedState<camera>(globalConfig['defaultCamera'])
     const [backgroundColor, setBackgroundColor] = useState<string>(globalConfig['black'])
+    const fileInputRef = useRef<HTMLInputElement>(null)
+    const inputsRef = useHeldKeys()
+    const interactionRef = useRef({
+        mode:null as 'move' | 'resize' | null,
+        pointerId:-1,
+        canvas:null as HTMLCanvasElement | null,
+        spriteIndex:-1,
+        start:[0, 0] as [number, number],
+        offset:[0, 0] as [number, number],
+    })
+    useRuntimeRoute('map-editor')
 
-    useEffect(() => {
-        setStart(true)
-    }, [])
-
-    useEffect(() => {
-        const keydown = (e:KeyboardEvent) => {addInput(e.code)}
-        const keyup = (e:KeyboardEvent) => {remInput(e.code)}
-        document.addEventListener('keydown', keydown)
-        document.addEventListener('keyup', keyup)
-        return () => {
-            document.removeEventListener('keydown', keydown)
-            document.removeEventListener('keyup', keyup)
+    useFixedStepAnimation(steps => {
+        let nextSprites = spritesRef.current
+        let nextPlayer = playerRef.current
+        let nextCamera = cameraRef.current
+        let nextEvents = activeEventsRef.current
+        for (let step = 0; step < steps; step += 1) {
+            const next = execute(lang, nextSprites, gravity, inputsRef.current, nextEvents, editorEnv, nextPlayer, nextCamera, ground)
+            nextSprites = next[0]
+            nextPlayer = next[1]
+            nextCamera = next[2]
+            nextEvents = next[3]
         }
-    }, [inputs])
+        setSprites(nextSprites)
+        setPlayer(nextPlayer)
+        setCamera(nextCamera)
+        setActiveEvents(nextEvents)
+    })
 
-    const addInput = (key:string) => {
-        let _ar:string[] = copy(inputs)
-        if(!_ar.includes(key)) _ar.push(key)
-        sendEvent('keydown')
-        setInputs(_ar)
-    }
-    const remInput = (key:string) => {
-        let _ar:string[] = copy(inputs)
-        let _i:number = _ar.indexOf(key)
-        _i != -1 ? _ar.splice(_i, 1) : null
-        sendEvent('keyup')
-        setInputs(_ar)
-    }
-
-    useInterval(() => {
-        const _ar = execute(lang, sprites, gravity, inputs, activeEvents, env, player, camera, ground)
-        setSprites(_ar[0])
-        setPlayer(_ar[1])
-        setCamera(_ar[2])
-        setActiveEvents(_ar[3])
-    }, start ? 10 : null)
-
-    const sendEvent = (eventName:eventName) => {
-        player.events.forEach((_v, _i) => {
-            if(_v.eventName == eventName){
-            }
-        })
-        sprites.forEach((_v, _i) => {
-            _v.events.forEach((_v2, _i2) => {
-                if(_v2.eventName == eventName){
-                }
-            })
-        })
-    }
     const openLevel = () => {
-        const fileInput = document.getElementById('fileInput') as HTMLInputElement;
-        fileInput.click()
-    
-        fileInput.addEventListener('change', (e) => {
-            const selectedFile = (fileInput.files as FileList)[0];
+        if (fileInputRef.current) {
+            fileInputRef.current.value = ''
+            fileInputRef.current.click()
+        }
+    }
 
-            if (selectedFile) {
-                const reader = new FileReader();
+    const handleMapFile = async (change:ChangeEvent<HTMLInputElement>) => {
+        const selectedFile = change.target.files?.[0]
+        if (!selectedFile) return
+        resetCanvasInteraction(true)
 
-                reader.onload = (event) => {
-                    const map = JSON.parse(event.target?.result as string) as map;
-
-                    // statement 적용
-                    setCamera(map.camera)
-                    setGravity(map.gravity)
-                    setPlayer(map.player)
-                    setSprites(map.sprites)
-                    setTexts(map.texts)
-                    setBackgroundColor(map.backgroundColor)
-                    setGround(map.ground)
-                };
-
-                reader.readAsText(selectedFile);
-            }
-        });
+        try {
+            const loadedMap = JSON.parse(await selectedFile.text()) as map
+            setCamera(loadedMap.camera)
+            setGravity(loadedMap.gravity)
+            setPlayer(loadedMap.player)
+            setSprites(loadedMap.sprites)
+            setTexts(loadedMap.texts)
+            setBackgroundColor(loadedMap.backgroundColor)
+            setGround(loadedMap.ground)
+            setActiveEvents([])
+            setFocusing(-1)
+        } catch (error) {
+            console.error('Unable to open map JSON.', error)
+        }
     }
 
     const exportLevel = () => {
         const _a = document.createElement('a') as HTMLAnchorElement
-        let _map:map = {backgroundColor, camera, gravity, ground, player, sprites, texts}
+        const _map:map = {backgroundColor, camera, gravity, ground, player, sprites, texts}
         _a.download = 'map.json'
-        let _blob = new Blob([JSON.stringify(_map)], {type:'application/json'})
+        const _blob = new Blob([JSON.stringify(_map)], {type:'application/json'})
         _a.href = URL.createObjectURL(_blob)
         _a.click()
+        URL.revokeObjectURL(_a.href)
     }
 
     const createSprite = () => {
-        let _ar:Msprite[] = copy(sprites)
-        _ar.push({
+        const newSprite:Msprite = {
             position:[0, 0],
             dposition:[0, 0],
             rotation:0,
@@ -145,92 +147,133 @@ export default function Page(){
             hitbox:[1, 1],
             events:[],
             tags:['sprite'],
-        })
-        setSprites(_ar)
+        }
+        setSprites(current => [...current, newSprite])
     }
 
     const setPlayerAttr = <K extends keyof player>(key: K, value: player[K]): void => {
-        let _player: player = copy(player)
-        _player[key] = value
-        setPlayer(_player)
+        setPlayer(current => ({ ...current, [key]:value }))
     }
 
     const setMspriteAttr = <K extends keyof Msprite>(key: K, value: Msprite[K], index:number): void => {
-        let _ar:Msprite[] = copy(sprites)
-        _ar[index][key] = value
-        setSprites(_ar)
+        setSprites(current => current.map((sprite, spriteIndex) => spriteIndex === index
+            ? { ...sprite, [key]:value }
+            : sprite
+        ))
     }
 
-    const setCameraAttr = <K extends keyof camera>(key: K, value: camera[K]): void => {
-        let _camera: camera = copy(camera)
-        _camera[key] = value
-        setCamera(_camera)
-    }
+    const resetCanvasInteraction = useCallback((cancelSizing:boolean) => {
+        const interaction = interactionRef.current
+        const canvas = interaction.canvas
+        const pointerId = interaction.pointerId
+        interaction.mode = null
+        interaction.pointerId = -1
+        interaction.canvas = null
+        interaction.spriteIndex = -1
+        if (cancelSizing) setSizing(false)
+        if (canvas?.hasPointerCapture(pointerId)) {
+            canvas.releasePointerCapture(pointerId)
+        }
+    }, [])
 
-    // resize msprite    
-    useEffect(() => {
-        const canvas:HTMLCanvasElement = document.querySelector('canvas')!
-        const mousedown = (e:MouseEvent) => {
-            setMouseStartPoint([e.offsetX, e.offsetY])
-        }
-        const mouseup = (e:MouseEvent) => {
-            if(mouseStartPoint[0] != e.offsetX && mouseStartPoint[1] != e.offsetY){
-                let _ar:Msprite[] = copy(sprites)
-                let _newWidth = e.offsetX - mouseStartPoint[0]
-                let _newHeight = e.offsetY - mouseStartPoint[1]
-                _ar[focusing].position[0] = mouseStartPoint[0] + _ar[focusing].anchor[0] * _newWidth + camera.position[0] - width/2*0.6
-                _ar[focusing].position[1] = mouseStartPoint[1] + _ar[focusing].anchor[1] * _newHeight + camera.position[1] - height/2
-                _ar[focusing].width = _newWidth
-                _ar[focusing].height = _newHeight
-                setSprites(_ar)
-                setSizing(false)
-            }
-        }
-        if(sizing){
-            canvas.addEventListener('mousedown', mousedown)
-            canvas.addEventListener('mouseup', mouseup)
-        }
-        return () => {
-            canvas.removeEventListener('mousedown', mousedown)
-            canvas.removeEventListener('mouseup', mouseup)
-        }
-    }, [sizing, focusing, sprites, mouseStartPoint, camera, width, height])
+    const worldPointForEvent = useEffectEvent((event:PointerEvent, canvas:HTMLCanvasElement) => (
+        clientPointToWorld(
+            [event.clientX, event.clientY],
+            canvas.getBoundingClientRect(),
+            [width * 0.6, height],
+            camera,
+        )
+    ))
 
-    // move msprite
+    const canvasPointerDown = useEffectEvent((event:PointerEvent) => {
+        if (event.button !== 0 || !(event.target instanceof HTMLCanvasElement) || focusing < 0) return
+        const focusedSprite = sprites[focusing]
+        const worldPoint = worldPointForEvent(event, event.target)
+        if (!focusedSprite || !worldPoint) return
+
+        event.preventDefault()
+        const interaction = interactionRef.current
+        interaction.mode = sizing ? 'resize' : 'move'
+        interaction.pointerId = event.pointerId
+        interaction.canvas = event.target
+        interaction.spriteIndex = focusing
+        interaction.start = worldPoint
+        interaction.offset = [
+            worldPoint[0] - focusedSprite.position[0],
+            worldPoint[1] - focusedSprite.position[1],
+        ]
+        event.target.setPointerCapture(event.pointerId)
+    })
+
+    const canvasPointerMove = useEffectEvent((event:PointerEvent) => {
+        const interaction = interactionRef.current
+        if (interaction.mode !== 'move' || event.pointerId !== interaction.pointerId || !interaction.canvas) return
+        const worldPoint = worldPointForEvent(event, interaction.canvas)
+        if (!worldPoint) return
+        setMspriteAttr('position', [
+            worldPoint[0] - interaction.offset[0],
+            worldPoint[1] - interaction.offset[1],
+        ], interaction.spriteIndex)
+    })
+
+    const canvasPointerUp = useEffectEvent((event:PointerEvent) => {
+        const interaction = interactionRef.current
+        if (!interaction.mode || event.pointerId !== interaction.pointerId || !interaction.canvas) return
+        const worldPoint = worldPointForEvent(event, interaction.canvas)
+
+        if (interaction.mode === 'resize' && worldPoint) {
+            const rectangle = normalizeDragRectangle(interaction.start, worldPoint)
+            if (rectangle) {
+                setSprites(current => current.map((sprite, index) => index === interaction.spriteIndex ? {
+                    ...sprite,
+                    position:[
+                        rectangle.x + sprite.anchor[0] * rectangle.width,
+                        rectangle.y + sprite.anchor[1] * rectangle.height,
+                    ],
+                    width:rectangle.width,
+                    height:rectangle.height,
+                } : sprite))
+            }
+        } else if (interaction.mode === 'move' && worldPoint) {
+            setMspriteAttr('position', [
+                worldPoint[0] - interaction.offset[0],
+                worldPoint[1] - interaction.offset[1],
+            ], interaction.spriteIndex)
+        }
+        resetCanvasInteraction(interaction.mode === 'resize')
+    })
+
+    const cancelPointerInteraction = useEffectEvent((event:PointerEvent) => {
+        if (event.pointerId !== interactionRef.current.pointerId) return
+        resetCanvasInteraction(true)
+    })
+
+    const cancelForWindowState = useEffectEvent(() => {
+        resetCanvasInteraction(true)
+    })
+
     useEffect(() => {
-        const canvas:HTMLCanvasElement = document.querySelector('canvas')!
-        const mousedown = (e:MouseEvent) => {
-            setIsMouseDown(true)
-            setMouseOffsetPoint([e.offsetX - sprites[focusing].position[0], e.offsetY - sprites[focusing].position[1]])
+        const visibilityChange = () => {
+            if (document.visibilityState !== 'visible') cancelForWindowState()
         }
-        const mousemove = (e:MouseEvent) => {
-            if(mouseStartPoint[0] != e.offsetX && mouseStartPoint[1] != e.offsetY && isMouseDown){
-                let _ar:Msprite[] = copy(sprites)
-                _ar[focusing].position[0] = e.offsetX - mouseOffsetPoint[0]
-                _ar[focusing].position[1] = e.offsetY - mouseOffsetPoint[1]
-                setSprites(_ar)
-            }
-        }
-        const mouseup = (e:MouseEvent) => {
-            if(isMouseDown){
-                let _ar:Msprite[] = copy(sprites)
-                _ar[focusing].position[0] = e.offsetX - mouseOffsetPoint[0]
-                _ar[focusing].position[1] = e.offsetY - mouseOffsetPoint[1]
-                setSprites(_ar)
-                setIsMouseDown(false)
-            }
-        }
-        if(focusing != -1){
-            canvas.addEventListener('mousedown', mousedown)
-            canvas.addEventListener('mousemove', mousemove)
-            canvas.addEventListener('mouseup', mouseup)
-        }
+        document.addEventListener('pointerdown', canvasPointerDown)
+        document.addEventListener('pointermove', canvasPointerMove)
+        document.addEventListener('pointerup', canvasPointerUp)
+        document.addEventListener('pointercancel', cancelPointerInteraction)
+        document.addEventListener('lostpointercapture', cancelPointerInteraction)
+        document.addEventListener('visibilitychange', visibilityChange)
+        window.addEventListener('blur', cancelForWindowState)
         return () => {
-            canvas.removeEventListener('mousedown', mousedown)
-            canvas.removeEventListener('mousemove', mousemove)
-            canvas.removeEventListener('mouseup', mouseup)
+            document.removeEventListener('pointerdown', canvasPointerDown)
+            document.removeEventListener('pointermove', canvasPointerMove)
+            document.removeEventListener('pointerup', canvasPointerUp)
+            document.removeEventListener('pointercancel', cancelPointerInteraction)
+            document.removeEventListener('lostpointercapture', cancelPointerInteraction)
+            document.removeEventListener('visibilitychange', visibilityChange)
+            window.removeEventListener('blur', cancelForWindowState)
+            cancelForWindowState()
         }
-    }, [focusing, sprites, mouseStartPoint, mouseOffsetPoint])
+    }, [])
 
     const openEventMap = () => {
         setFocusingEvent(focusing)
@@ -267,31 +310,31 @@ export default function Page(){
             <hr />
             <div>
                 <label>Position</label>
-                <input type="number" value={camera.position[0]} onChange={(e) => {setCamera({position:[Number(e.target.value), camera.position[1]], rotation:camera.rotation, scale:camera.scale, follow:camera.follow})}} />
-                <input type="number" value={camera.position[1]} onChange={(e) => {setCamera({position:[camera.position[0], Number(e.target.value)], rotation:camera.rotation, scale:camera.scale, follow:camera.follow})}} />
+                <input aria-label="Camera position X" type="number" value={camera.position[0]} onChange={(e) => {setCamera({position:[Number(e.target.value), camera.position[1]], rotation:camera.rotation, scale:camera.scale, follow:camera.follow})}} />
+                <input aria-label="Camera position Y" type="number" value={camera.position[1]} onChange={(e) => {setCamera({position:[camera.position[0], Number(e.target.value)], rotation:camera.rotation, scale:camera.scale, follow:camera.follow})}} />
             </div>
             <div>
                 <label>Rotation</label>
-                <input type="number" value={camera.rotation} onChange={(e) => {setCamera({position:camera.position, rotation:Number(e.target.value), scale:camera.scale, follow:camera.follow})}} />
+                <input aria-label="Camera rotation" type="number" value={camera.rotation} onChange={(e) => {setCamera({position:camera.position, rotation:Number(e.target.value), scale:camera.scale, follow:camera.follow})}} />
             </div>
             <div>
                 <label>Scale</label>
-                <input type="number" value={camera.scale} onChange={(e) => {setCamera({position:camera.position, rotation:camera.rotation, scale:Number(e.target.value), follow:camera.follow})}} />
+                <input aria-label="Camera scale" type="number" value={camera.scale} onChange={(e) => {setCamera({position:camera.position, rotation:camera.rotation, scale:Number(e.target.value), follow:camera.follow})}} />
             </div>
             <div>
                 <label>Follow</label>
                 <input type="text" value={camera.follow} onChange={(e) => {setCamera({position:camera.position, rotation:camera.rotation, scale:camera.scale, follow:e.target.value})}} />
             </div>
             <hr />
-            <button onClick={e => {createSprite()}}>Create Sprite</button>
-            <div className={focusing == -1 ? "select" : ""} onClick={e => {setFocusing(-1);setEvText("")}}>player</div>
+            <button onClick={() => {createSprite()}}>Create Sprite</button>
+            <div className={focusing == -1 ? "select" : ""} onClick={() => {setFocusing(-1);setEvText("")}}>player</div>
             {sprites.map((_v, _i) => (
-                <div onClick={e => {setFocusing(_i);setEvText("")}} key={_i} className={focusing == _i ? "select" : ""}>
+                <div onClick={() => {setFocusing(_i);setEvText("")}} key={_i} className={focusing == _i ? "select" : ""}>
                     {_v.tags.join(' ')}
                 </div>
             ))}
         </div>
-        {exRender([width*0.6, height], lang, MsArrToRsArr(sprites), texts, player, camera, backgroundColor, true)}
+        {exRender([width*0.6, height], lang, MsArrToRsArr(sprites), texts, player, camera, backgroundColor, true, 'map-editor')}
         <div>
             {focusing == -1 ? <>
                 <div>
@@ -354,13 +397,13 @@ export default function Page(){
                     <textarea value={evText} onChange={e => setEvText(e.target.value)} onKeyDown={e => {
                         if(e.code == 'Enter'){
                             try{
-                                let _ar:mevent[] = JSON.parse(evText)
+                                const _ar:mevent[] = JSON.parse(evText)
                                 setPlayerAttr('events', _ar)
-                            } catch(e){
+                            } catch(_error){
                                 setEvText(JSON.stringify(player.events))
                             }
                         }
-                    }} onFocus={e => {
+                    }} onFocus={() => {
                         setEvText(JSON.stringify(player.events))
                     }}></textarea>
                     <button onClick={openEventMap}>Event Map</button>
@@ -376,8 +419,8 @@ export default function Page(){
             </> : <>
                 <div>
                     <label>Position</label>
-                    <input type="number" value={sprites[focusing].position[0]} onChange={(e) => {setMspriteAttr('position', [Number(e.target.value), sprites[focusing].position[1]], focusing)}} />
-                    <input type="number" value={sprites[focusing].position[1]} onChange={(e) => {setMspriteAttr('position', [sprites[focusing].position[0], Number(e.target.value)], focusing)}} />
+                    <input aria-label="Sprite position X" type="number" value={sprites[focusing].position[0]} onChange={(e) => {setMspriteAttr('position', [Number(e.target.value), sprites[focusing].position[1]], focusing)}} />
+                    <input aria-label="Sprite position Y" type="number" value={sprites[focusing].position[1]} onChange={(e) => {setMspriteAttr('position', [sprites[focusing].position[0], Number(e.target.value)], focusing)}} />
                 </div>
                 <div>
                     <label>Rotation</label>
@@ -385,11 +428,11 @@ export default function Page(){
                 </div>
                 <div>
                     <label>Width</label>
-                    <input type="number" value={sprites[focusing].width} onChange={(e) => {setMspriteAttr('width', Number(e.target.value), focusing)}} />
+                    <input aria-label="Sprite width" type="number" value={sprites[focusing].width} onChange={(e) => {setMspriteAttr('width', Number(e.target.value), focusing)}} />
                 </div>
                 <div>
                     <label>Height</label>
-                    <input type="number" value={sprites[focusing].height} onChange={(e) => {setMspriteAttr('height', Number(e.target.value), focusing)}} />
+                    <input aria-label="Sprite height" type="number" value={sprites[focusing].height} onChange={(e) => {setMspriteAttr('height', Number(e.target.value), focusing)}} />
                 </div>
                 <div>
                     <label>Opacity</label>
@@ -418,13 +461,13 @@ export default function Page(){
                     <textarea value={evText} onChange={e => setEvText(e.target.value)} onKeyDown={e => {
                         if(e.code == 'Enter'){
                             try{
-                                let _ar:mevent[] = JSON.parse(evText)
+                                const _ar:mevent[] = JSON.parse(evText)
                                 setMspriteAttr('events', _ar, focusing)
-                            } catch(e){
+                            } catch(_error){
                                 setEvText(JSON.stringify(sprites[focusing].events))
                             }
                         }
-                    }} onFocus={e => {
+                    }} onFocus={() => {
                         setEvText(JSON.stringify(sprites[focusing].events))
                     }}></textarea>
                     <button onClick={openEventMap}>Event Map</button>
@@ -445,14 +488,14 @@ export default function Page(){
                     <label>showHitbox</label>
                     <input type="checkbox" checked={sprites[focusing].showHitbox} onChange={(e) => {setMspriteAttr('showHitbox', e.target.checked, focusing)}} />
                 </div>
-                <button onClick={e => {setSizing(true)}}>{sizing ? "Sizing..." : "Set Size"}</button>
+                <button onClick={() => {setSizing(true)}}>{sizing ? "Sizing..." : "Set Size"}</button>
             </>}
         </div>
-        {isEventMapOpen && <div className="back" onMouseDown={e => setIsEventMapOpen(false)}></div>}
+        {isEventMapOpen && <div className="back" onMouseDown={() => setIsEventMapOpen(false)}></div>}
         {isEventMapOpen && <div className="eventmap">{
             focusing == -1 ? player.events.map((_v, _i) => createEventMap(_v, _i)) :
             sprites[focusingEvent].events.map((_v, _i) => createEventMap(_v, _i))
         }</div>}
-        <input type="file" name="" id="fileInput" style={{display:'none'}} />
+        <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleMapFile} style={{display:'none'}} />
     </div>
 }
