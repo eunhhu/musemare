@@ -1,117 +1,59 @@
 'use client'
 
-import { useContext, useEffect, useState } from "react"
-import { globalConfig, globalContext } from "../main"
-import { toLang } from "../data/lang"
-import { execute, exRender } from "../logic/exploreEngine"
-import { useInterval, useWindowSize } from "usehooks-ts"
-import { Msprite, camera, eventName, exevent, mevent, player, text } from "../data/types"
-import { copy, MsArrToRsArr } from "../data/utils"
-import { maps } from "../data/map"
+import { useContext, useState } from 'react'
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import type { Msprite, camera, exevent, player, text } from '../data/types'
+import { maps } from '../data/map'
+import { MsArrToRsArr } from '../data/utils'
+import { useFixedStepAnimation } from '../hooks/useFixedStepAnimation'
+import { useHeldKeys } from '../hooks/useHeldKeys'
+import { useSceneFade } from '../hooks/useSceneFade'
+import { useWindowSize } from '../hooks/useWindowSize'
+import { execute, exRender } from '../logic/exploreEngine'
+import { globalConfig, globalContext } from '../main'
 
 export default function Index(){
     const { width, height } = useWindowSize()
-    const {lang, setLang} = useContext(globalContext)
-    const {scene, setScene} = useContext(globalContext)
-    const {env, setEnv} = useContext(globalContext)
-    const {exploreCode, setExploreCode} = useContext(globalContext)
-    const [brightness, setBrightness] = useState<number>(0)
-    const [b_event, setB_event] = useState<string>('')
+    const {lang, setScene, env, exploreCode} = useContext(globalContext)
+    const { style } = useSceneFade(setScene)
+    const selectedMap = maps[exploreCode]
+    const [start] = useState(Boolean(selectedMap))
+    const [activeEvents, setActiveEvents] = useState<exevent[]>([])
+    const [sprites, setSprites] = useState<Msprite[]>(() => selectedMap?.sprites ?? [])
+    const [texts] = useState<text[]>(() => selectedMap?.texts ?? [])
+    const [gravity] = useState<number>(() => selectedMap?.gravity ?? globalConfig.defaultGravity)
+    const [ground] = useState<number>(() => selectedMap?.ground ?? globalConfig.defaultGround)
+    const [player, setPlayer] = useState<player>(() => selectedMap?.player ?? globalConfig.defaultPlayer)
+    const [camera, setCamera] = useState<camera>(() => selectedMap?.camera ?? globalConfig.defaultCamera)
+    const [backgroundColor] = useState<string>(() => selectedMap?.backgroundColor ?? globalConfig.black)
+    const inputsRef = useHeldKeys(start)
+    useRuntimeRoute('explore')
 
-    // ingame state
-    const [start, setStart] = useState<boolean>(false)
-    const [inputs, setInputs] = useState<string[]>([])
-    const [event, setEvent] = useState<exevent[]>([])
-    const [sprites, setSprites] = useState<Msprite[]>([])
-    const [texts, setTexts] = useState<text[]>([])
-    const [gravity, setGravity] = useState<number>(globalConfig['defaultGravity'])
-    const [ground, setGround] = useState<number>(globalConfig['defaultGround'])
-    const [canControl, setCanControl] = useState<boolean>(true)
-    const [player, setPlayer] = useState<player>(globalConfig['defaultPlayer'])
-    const [camera, setCamera] = useState<camera>(globalConfig['defaultCamera'])
-    const [backgroundColor, setBackgroundColor] = useState<string>(globalConfig['black'])
-
-    const endWith = (str:string) => {
-        setB_event(str)
-    }
-
-    useEffect(() => {
-        if(b_event != ''){
-            let t = 1
-            let loop = setInterval(() => {
-                t -= 0.02
-                setBrightness(t)
-                if(t <= 0) {
-                    clearInterval(loop)
-                    setScene(b_event)
-                }
-            }, 1)
+    useFixedStepAnimation(steps => {
+        let nextSprites = sprites
+        let nextPlayer = player
+        let nextCamera = camera
+        let nextEvents = activeEvents
+        for (let step = 0; step < steps; step += 1) {
+            const next = execute(lang, nextSprites, gravity, inputsRef.current, nextEvents, env, nextPlayer, nextCamera, ground)
+            nextSprites = next[0]
+            nextPlayer = next[1]
+            nextCamera = next[2]
+            nextEvents = next[3]
         }
-    }, [b_event])
+        setSprites(nextSprites)
+        setPlayer(nextPlayer)
+        setCamera(nextCamera)
+        setActiveEvents(nextEvents)
+    }, start)
 
-    useEffect(() => {
-        let t = 0
-        let loop = setInterval(() => {
-            t += 0.02
-            setBrightness(t)
-            if(t >= 1) clearInterval(loop)
-        }, 1)
-
-        let _map = maps[exploreCode]
-        
-        setStart(true)
-    
-        return () => clearInterval(loop)
-    }, [])
-
-    useEffect(() => {
-        const keydown = (e:KeyboardEvent) => {addInput(e.code)}
-        const keyup = (e:KeyboardEvent) => {remInput(e.code)}
-        document.addEventListener('keydown', keydown)
-        document.addEventListener('keyup', keyup)
-        return () => {
-            document.removeEventListener('keydown', keydown)
-            document.removeEventListener('keyup', keyup)
-        }
-    }, [inputs])
-
-    const addInput = (key:string) => {
-        let _ar:string[] = copy(inputs)
-        if(!_ar.includes(key)) _ar.push(key)
-        sendEvent('keydown')
-        setInputs(_ar)
-    }
-    const remInput = (key:string) => {
-        let _ar:string[] = copy(inputs)
-        let _i:number = _ar.indexOf(key)
-        _i != -1 ? _ar.splice(_i, 1) : null
-        sendEvent('keyup')
-        setInputs(_ar)
+    if (!start) {
+        return <div style={style} className="Explore fullscreen blackbg">
+            <div>Explore maps are not available in this build.</div>
+        </div>
     }
 
-    useInterval(() => {
-        const _ar = execute(lang, sprites, gravity, inputs, event, env, player, camera, ground)
-        setSprites(_ar[0])
-        setPlayer(_ar[1])
-        setCamera(_ar[2])
-    }, start ? 10 : null)
-
-    const sendEvent = (eventName:eventName) => {
-        player.events.forEach((_v, _i) => {
-            if(_v.eventName == eventName){
-                // eval(_v.target)
-            }
-        })
-        sprites.forEach((_v, _i) => {
-            _v.events.forEach((_v2, _i2) => {
-                if(_v2.eventName == eventName){
-                    // eval(_v2.script)
-                }
-            })
-        })
-    }
-
-    return <div style={{filter:`brightness(${brightness})`}} className="Explore">
-        {exRender([width, height], lang, MsArrToRsArr(sprites), texts, player, camera, backgroundColor, true)}
+    return <div style={style} className="Explore">
+        {exRender([width, height], lang, MsArrToRsArr(sprites), texts, player, camera, backgroundColor, true, 'explore')}
     </div>
 }

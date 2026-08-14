@@ -1,83 +1,85 @@
 'use client'
 
-import { useContext, useEffect, useState } from "react"
+import { useContext, useEffect, useRef, useState } from "react"
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { isLevelAvailable, levelManifest } from '../data/levelManifest'
 import { globalContext, globalConfig } from "../main"
 import { toLang } from "../data/lang"
-import { levels } from "../data/level"
-import { useInterval } from "usehooks-ts"
+import { useAnimationFrame } from "../hooks/useAnimationFrame"
+import { useSceneFade } from "../hooks/useSceneFade"
+import { getEndingAccess, isProgressionStageAccessible } from '../logic/progression'
+
+const defaultLevelList = [[-1,-1,-1],[-1,-1,-1],[-1,-1,-1],[-1,-1,-1]]
 
 export default function Index(){
-    const {lang, setLang} = useContext(globalContext)
-    const {scene, setScene} = useContext(globalContext)
-    const {battleCode, setBattleCode} = useContext(globalContext)
-    const {afterBattleScene, setAfterBattleScene} = useContext(globalContext)
-    const [brightness, setBrightness] = useState<number>(0)
-    const [b_event ,setB_event] = useState<string>('')
+    const {lang, setScene, setBattleCode, setAfterBattleScene} = useContext(globalContext)
     const [selected, setSelected] = useState<string>('')
-    const [levelList, setLevelList] = useState<number[][]>([[-1,-1,-1],[-1,-1,-1],[-1,-1,-1],[-1,-1,-1]])
+    const [levelList, setLevelList] = useState<number[][]>(defaultLevelList)
     const [rainbowColor, setRainbowColor] = useState<string>('#000000')
-
-    const endWith = (str:string) => {
-        setB_event(str)
-    }
-
-    useEffect(() => {
-        if(b_event != ''){
-            let t = 1
-            let loop = setInterval(() => {
-                t -= 0.02
-                setBrightness(t)
-                if(t <= 0) {
-                    clearInterval(loop)
-                    setScene(b_event)
-                }
-            }, 1)
-        }
-    }, [b_event])
+    const lastRainbowUpdate = useRef(0)
+    const { style, transitionTo } = useSceneFade(setScene)
+    const endingAccess = getEndingAccess(globalConfig.levelList, levelList, isLevelAvailable)
+    useRuntimeRoute('selector')
 
     useEffect(() => {
-        let t = 0
-        let loop = setInterval(() => {
-            t += 0.02
-            setBrightness(t)
-            if(t >= 1) clearInterval(loop)
-        }, 1)
-
         const clearList = localStorage.getItem('clearLevelList')
-        if(clearList == null) localStorage.setItem('clearLevelList', JSON.stringify([[-1,-1,-1],[-1,-1,-1],[-1,-1,-1],[-1,-1,-1],-1]))
-        const clearLevelList:number[][] = JSON.parse(localStorage.getItem('clearLevelList') as string)
-        setLevelList(clearLevelList)
-        return () => clearInterval(loop)
+        if(clearList == null) {
+            localStorage.setItem('clearLevelList', JSON.stringify(defaultLevelList))
+            return
+        }
+
+        try {
+            const parsed = JSON.parse(clearList)
+            if (Array.isArray(parsed)) setLevelList(parsed)
+        } catch (error) {
+            console.error('Unable to read level progress.', error)
+            localStorage.setItem('clearLevelList', JSON.stringify(defaultLevelList))
+        }
     }, [])
 
-    useInterval(() => {
-        // slow rainbow
-        let t = (Date.now() / 3000) % 1
-        let r = Math.round(Math.sin(t * 2 * Math.PI) * 127 + 128)
-        let g = Math.round(Math.sin(t * 2 * Math.PI + 2 * Math.PI / 3) * 127 + 128)
-        let b = Math.round(Math.sin(t * 2 * Math.PI + 4 * Math.PI / 3) * 127 + 128)
+    useAnimationFrame((timestamp) => {
+        if (timestamp - lastRainbowUpdate.current < 50) return
+        lastRainbowUpdate.current = timestamp
+        const t = (Date.now() / 3000) % 1
+        const r = Math.round(Math.sin(t * 2 * Math.PI) * 127 + 128)
+        const g = Math.round(Math.sin(t * 2 * Math.PI + 2 * Math.PI / 3) * 127 + 128)
+        const b = Math.round(Math.sin(t * 2 * Math.PI + 4 * Math.PI / 3) * 127 + 128)
         setRainbowColor(`rgb(${r},${g},${b})`)
-    }, 10)
+    }, endingAccess === 'completed')
 
-    return <div style={{filter:`brightness(${brightness})`}} className="Selector fullscreen blackbg">
-        {!selected ? <>{(globalConfig['mapList'] as string[]).map((v, i) => (
-            <div className={i > 0 ? levelList[i-1][2] < 0.9 ? 'disabled' : '' : ''} key={i} onClick={e => {
-                if(i > 0 && levelList[i-1][2] < 0.9) return;
+    return <div style={style} className="Selector fullscreen blackbg">
+        {!selected ? <>{globalConfig.mapList.map((v, i) => (
+            <div className={!isProgressionStageAccessible(globalConfig.levelList, levelList, i, isLevelAvailable) ? 'disabled' : ''} key={i} onClick={() => {
+                if(!isProgressionStageAccessible(globalConfig.levelList, levelList, i, isLevelAvailable)) return
                 setSelected(v)
             }}>{toLang(lang, v)}</div>
-        ))} {levelList[3][2] >= 0.9 && <div style={{borderColor:rainbowColor, color:rainbowColor}} onClick={e => {
+        ))} {endingAccess !== 'locked' && <button type="button" style={endingAccess === 'completed' ? {borderColor:rainbowColor, color:rainbowColor} : undefined} onClick={() => {
             setBattleCode('ending')
-            endWith('Battle')
+            transitionTo('Battle')
             setAfterBattleScene('Selector')
-        }}>{toLang(lang, 'ending')}</div>}</>:
-        <>{(globalConfig['levelList'] as string[][])[(globalConfig['mapList'] as string[]).indexOf(selected)].map((v, i) => (
-            <div className={''} key={i} onClick={e => {
-                setBattleCode(v)
-                endWith('Battle')
-                setAfterBattleScene('Selector')
-            }}>{toLang(lang, v)}</div>
-        ))}
-        <div onClick={e => setSelected('')}>{toLang(lang, 'goback')}</div></>}
-        <div className="goback" onClick={e => endWith('MainMenu')}>{toLang(lang, 'goback')}</div>
+        }}>{endingAccess === 'prerequisites-unavailable' ? 'Play Ending — prerequisites unavailable' : toLang(lang, 'ending')}</button>}
+        {endingAccess === 'prerequisites-unavailable' && <div className="availability-note">The prerequisite recordings are unavailable, so the existing ending is offered as a standalone playable level. No unavailable prerequisite is marked complete.</div>}</>:
+        <>{globalConfig.levelList[globalConfig.mapList.indexOf(selected)].map((v, i) => {
+            const manifest = levelManifest[v]
+            const unavailable = manifest.availability === 'unavailable'
+            const label = unavailable
+                ? `${manifest.track.artist} — ${manifest.track.title} — Unavailable`
+                : toLang(lang, v)
+            return <button
+                type="button"
+                key={i}
+                aria-disabled={unavailable}
+                className={unavailable ? 'disabled' : ''}
+                onClick={() => {
+                    if (unavailable) return
+                    setBattleCode(v)
+                    transitionTo('Battle')
+                    setAfterBattleScene('Selector')
+                }}
+            >{label}</button>
+        })}
+        <div className="availability-note">Unavailable levels keep their original chart and track identity, but cannot start without the matching recording.</div>
+        <div onClick={() => setSelected('')}>{toLang(lang, 'goback')}</div></>}
+        <div className="goback" onClick={() => transitionTo('MainMenu')}>{toLang(lang, 'goback')}</div>
     </div>
 }

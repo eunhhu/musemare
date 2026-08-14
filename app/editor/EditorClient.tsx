@@ -1,18 +1,56 @@
 'use client'
 
-import { useEffect, useState } from "react"
-import { copy, enableFilters, isInRange, strengthFilters } from "../data/utils"
-import { obj, event, level, objEvent, eventProps, objEventProps, filter, filterType } from "../data/types"
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
+import { enableFilters, isInRange, strengthFilters } from "../data/utils"
+import { obj, event, level, objEvent, eventProps, objEventProps, filter, filterType, eventValue } from "../data/types"
 import { battleEngine } from "../logic/battleEngine"
+import {
+    enqueuePendingHit,
+    evaluateJudgements,
+    isAudioActivelyPlaying,
+    prepareNotes,
+    timelineStampFromAudio,
+    type JudgementState,
+} from "../logic/battleDomain"
+import { clearEditorSeekEpoch, pauseAudioForLevelImport, seekAudioToLevelStart } from '../logic/editorAudio'
+import { isEditableTarget } from '../logic/input'
+import { createRuntimeAssetFailure, mediaSourceMatches } from '../logic/runtimeAssets'
+import { audioTimeToTimeline, buildGridLines, clampTimeline } from "../logic/timing"
+import { useAnimationFrame } from "../hooks/useAnimationFrame"
 
 // ui 조절 드래그 범위
 const dragRange = 6
 
+type ObjectEditorValue = string | number | boolean | [0|1, number]
+type EventEditorValue = event[eventProps]
+type ObjectEventEditorValue = objEvent[objEventProps]
+
+function inputEventValue(value:eventValue | undefined):string | number {
+    return typeof value === 'string' || typeof value === 'number' ? value : ''
+}
+
+function vectorEventValue(value:eventValue | undefined):[number, number] {
+    return Array.isArray(value) ? value : [0, 0]
+}
+
+function booleanEventValue(value:eventValue | undefined):boolean {
+    return typeof value === 'boolean' ? value : Boolean(value)
+}
+
 // 플레이 가능한 키 등록
 const playKeys = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'BracketLeft', 'BracketRight', 'Backslash', 'Equal', 'Minus', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9']
 
+const defaultFilters:filter = {blur:0, dot:0, motionBlur:0, bloom:0, godray:0, convolution:0, glitch:0, grayscale:0, noise:0, pixelate:0, rgbsplit:0}
+
+function insertByStamp<T extends { stamp:number }>(items:T[], item:T) {
+    const index = items.findIndex(current => current.stamp > item.stamp)
+    return index === -1
+        ? [...items, item]
+        : [...items.slice(0, index), item, ...items.slice(index)]
+}
+
 export default function Page(){
-    const [lang, setLang] = useState<string>('en-US')
     // ui settings
     const [underbarLine, setUnderbarLine] = useState<number>(30)
     const [mainsetLine, setMainsetLine] = useState<number>(20)
@@ -35,7 +73,7 @@ export default function Page(){
     const [position, setPosition] = useState<[number, number]>([0, 0])
     const [rotate, setRotate] = useState<number>(0)
     const [scale, setScale] = useState<number>(1)
-    const [filters, setFilters] = useState<filter>({blur:0, dot:0, motionBlur:0, bloom:0, godray:0, convolution:0, glitch:0, grayscale:0, noise:0, pixelate:0, rgbsplit:0})
+    const [filters, setFilters] = useState<filter>(defaultFilters)
     
     // env settings
     const [grid, setGrid] = useState<number>(4)
@@ -44,86 +82,108 @@ export default function Page(){
     const [playing, setPlaying] = useState<boolean>(false)
     const [zoom, setZoom] = useState<number>(100)
     const [timeline, setTimeline] = useState<number>(0)
-    const [gridLine, setGridLine] = useState<number[]>([])
+    const gridLine = useMemo(() => buildGridLines({ bpm, divisions:grid, endpoint, offset:gridOffset }), [bpm, endpoint, grid, gridOffset])
     const [sel, setSel] = useState<'chart'|'sprite'>('chart')
     const [focusEvent, setFocusEvent] = useState<[number, number]>([-1, 0]) // 0 = main | other = obj's idx, index
     const [focusNote, setFocusNote] = useState<[number, number]>([-1, 0]) // obj's idx, index
     const [focusObj, setFocusObj] = useState<number>(0)
     const [focusing, setFocusing] = useState<number>(0) // 0 = obj, 1 = event, 2 = note
     const [evClipboard, setEvClipboard] = useState<event|objEvent>()
-    const [hits, setHits] = useState<number[]>([])
-
-    let v_playing:boolean = false, v_zoom:number = 100, v_timeline = 0 // 미등록 자연 변경 변수
-
-    let ubl = 30
-    let msl = 20
-    let esl = 20
-    let obl = 20
-    let Dragging = ''
-    let cont_dragging = false
-    let scrow_dragging = false
+    const audioRef = useRef<HTMLAudioElement>(null)
+    const fileInputRef = useRef<HTMLInputElement>(null)
+    const zoomRef = useRef(100)
+    const timelineRef = useRef(0)
+    const pendingHitsRef = useRef<number[]>([])
+    const judgementsRef = useRef<JudgementState>({})
+    const [judgements, setJudgements] = useState<JudgementState>({})
+    const sourceEpochRef = useRef(0)
+    const audioTask = useRuntimeTask('asset', song, Boolean(song))
+    const clearSeekEpoch = useCallback(() => {
+        clearEditorSeekEpoch(pendingHitsRef, judgementsRef, setJudgements)
+    }, [])
+    const layoutRef = useRef({
+        underbar: 30,
+        mainset: 20,
+        eventset: 20,
+        objects: 20,
+        dragging: '',
+        controlsDragging: false,
+        scrollbarDragging: false,
+    })
+    const renderData = useMemo(() => ({
+        events,
+        objs,
+        backgroundColor: BackgroundColor,
+        position,
+        rotate,
+        scale,
+        filters,
+    }), [BackgroundColor, events, filters, objs, position, rotate, scale])
+    const preparedNotes = useMemo(() => prepareNotes(objs), [objs])
+    useRuntimeRoute('battle-editor')
     
     useEffect(() => {
-        setLang(navigator.language)
         setCondset([innerWidth, innerHeight])
-
-        // const canvas = document.querySelector('canvas') as HTMLCanvasElement
+        const layout = layoutRef.current
         
         function resizeCanvas(){
             setCondset([innerWidth, innerHeight])
-            setStageSize([innerWidth / 100 * (100 - msl - esl), innerHeight / 100 * (100 - ubl)])
+            setStageSize([
+                innerWidth / 100 * (100 - layout.mainset - layout.eventset),
+                innerHeight / 100 * (100 - layout.underbar),
+            ])
         }
-        window.onresize = resizeCanvas
+        window.addEventListener('resize', resizeCanvas)
         resizeCanvas()
 
         function keydown(e:KeyboardEvent){
-            if(e.altKey){
+            if(e.altKey && !isEditableTarget(e.target)){
                 e.preventDefault()
             }
         }
-        function mouseup(e:MouseEvent){
-            Dragging = ''
+        function mouseup(){
+            layout.dragging = ''
         }
         function mousedown(e:MouseEvent){
-            if(isInRange(e.clientY, dragRange, innerHeight / 100 * (100-ubl))){
-                Dragging = 'underbar'
-            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (msl)) && e.clientY < (innerHeight / 100 * (100-ubl))){
-                Dragging = 'mainset'
-            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (100-esl)) && e.clientY < (innerHeight / 100 * (100-ubl))){
-                Dragging = 'eventset'
-            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (obl)) && e.clientY > (innerHeight / 100 * (100-ubl))){
-                Dragging = 'objs'
+            if(isInRange(e.clientY, dragRange, innerHeight / 100 * (100-layout.underbar))){
+                layout.dragging = 'underbar'
+            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.mainset) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
+                layout.dragging = 'mainset'
+            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (100-layout.eventset)) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
+                layout.dragging = 'eventset'
+            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.objects) && e.clientY > (innerHeight / 100 * (100-layout.underbar))){
+                layout.dragging = 'objs'
             }
         }
         function mousemove(e:MouseEvent){
-            if(Dragging){
-                switch(Dragging){
+            if(layout.dragging){
+                switch(layout.dragging){
                     case 'underbar':
-                        ubl = 100 - (100 * e.clientY / innerHeight)
-                        setUnderbarLine(ubl)
+                        layout.underbar = 100 - (100 * e.clientY / innerHeight)
+                        setUnderbarLine(layout.underbar)
                         break;
                     case 'mainset':
-                        msl = (100 * e.clientX / innerWidth)
-                        setMainsetLine(msl)
+                        layout.mainset = (100 * e.clientX / innerWidth)
+                        setMainsetLine(layout.mainset)
                         break;
-                        case 'eventset':
-                        esl = 100 - (100 * e.clientX / innerWidth)
-                        setEventsetLine(esl)
+                    case 'eventset':
+                        layout.eventset = 100 - (100 * e.clientX / innerWidth)
+                        setEventsetLine(layout.eventset)
                         break;
                     case 'objs':
-                        obl = (100 * e.clientX / innerWidth)
-                        setObjLine(obl)
+                        layout.objects = (100 * e.clientX / innerWidth)
+                        setObjLine(layout.objects)
                         break;
                 }
                 resizeCanvas()
             } else {
-                if(isInRange(e.clientY, dragRange, innerHeight / 100 * (100-ubl))){
+                if(isInRange(e.clientY, dragRange, innerHeight / 100 * (100-layout.underbar))){
                     document.body.style.cursor = 'n-resize'
-                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (msl)) && e.clientY < (innerHeight / 100 * (100-ubl))){
+                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.mainset) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
                     document.body.style.cursor = 'e-resize'
-                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (100-esl)) && e.clientY < (innerHeight / 100 * (100-ubl))){
+                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (100-layout.eventset)) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
                     document.body.style.cursor = 'e-resize'
-                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (obl)) && e.clientY > (innerHeight / 100 * (100-ubl))){
+                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.objects) && e.clientY > (innerHeight / 100 * (100-layout.underbar))){
                     document.body.style.cursor = 'e-resize'
                 } else {
                     document.body.style.cursor = 'unset'
@@ -133,9 +193,9 @@ export default function Page(){
         
         function wheel(e:WheelEvent){
             if(e.altKey){
-                v_zoom -= (v_zoom/8)*(e.deltaY / 100)
-                v_zoom < 1 && (v_zoom = 1)
-                setZoom(v_zoom)
+                zoomRef.current -= (zoomRef.current/8)*(e.deltaY / 100)
+                zoomRef.current = Math.max(zoomRef.current, 1)
+                setZoom(zoomRef.current)
             }
         }
         const contextmenu = (e:Event) => {
@@ -149,17 +209,20 @@ export default function Page(){
         document.addEventListener('mouseup', mouseup)
         document.addEventListener('keydown', keydown)
         return () => {
+            window.removeEventListener('resize', resizeCanvas)
             document.removeEventListener('wheel', wheel)
             document.removeEventListener('contextmenu', contextmenu)
             document.removeEventListener('mousemove', mousemove)
             document.removeEventListener('mousedown', mousedown)
             document.removeEventListener('mouseup', mouseup)
             document.removeEventListener('keydown', keydown)
+            document.body.style.cursor = 'unset'
         }
     }, [])
     
     // new 눌렀을때 리셋
     const reset = () => {
+        pauseAudioForLevelImport(audioRef.current)
         setGrid(4)
         setBpm(100)
         setSong("")
@@ -168,179 +231,224 @@ export default function Page(){
         setVolume(100)
         setEndpoint(90)
         setPlaying(false)
+        zoomRef.current = 100
         setZoom(100)
         setRowScroll(0)
         setColScroll(0)
-        v_setTimeline(0)
+        timelineRef.current = 0
+        clearSeekEpoch()
         setEvents([])
         setObjs([])
+        setFilters(defaultFilters)
         setEvClipboard(undefined)
         setFocusEvent([-1, 0])
         setFocusing(0)
         setFocusNote([-1, 0])
         setFocusObj(0)
-        v_playing = false
-        v_zoom = 0
+        v_setTimeline(0)
     }
 
     const openLevel = () => {
-        const fileInput = document.getElementById('fileInput') as HTMLInputElement;
-        fileInput.click()
-    
-        fileInput.addEventListener('change', (e) => {
-            const selectedFile = (fileInput.files as FileList)[0];
+        if (fileInputRef.current) {
+            fileInputRef.current.value = ''
+            fileInputRef.current.click()
+        }
+    }
 
-            if (selectedFile) {
-                const reader = new FileReader();
+    const handleLevelFile = async (change:ChangeEvent<HTMLInputElement>) => {
+        const selectedFile = change.target.files?.[0]
+        if (!selectedFile) return
+        pauseAudioForLevelImport(audioRef.current)
+        setPlaying(false)
+        clearSeekEpoch()
 
-                reader.onload = (event) => {
-                    const level = JSON.parse(event.target?.result as string) as level;
-
-                    // statement 적용
-                    setBpm(level.bpm)
-                    setOffset(level.offset)
-                    setSong(level.song)
-                    setBackgroundColor(level.backgroundColor)
-                    setVolume(level.volume)
-                    setEndpoint(level.endpoint)
-                    setObjs(level.objs)
-                    setEvents(level.events)
-                    setPosition(level.position)
-                    setRotate(level.rotate)
-                    setScale(level.scale)
-                };
-
-                reader.readAsText(selectedFile);
-            }
-        });
+        try {
+            const loadedLevel = JSON.parse(await selectedFile.text()) as level
+            setBpm(loadedLevel.bpm)
+            setOffset(loadedLevel.offset)
+            setSong(loadedLevel.song)
+            setBackgroundColor(loadedLevel.backgroundColor)
+            setVolume(loadedLevel.volume)
+            setEndpoint(loadedLevel.endpoint)
+            setObjs(loadedLevel.objs)
+            setEvents(loadedLevel.events)
+            setPosition(loadedLevel.position)
+            setRotate(loadedLevel.rotate)
+            setScale(loadedLevel.scale)
+            setFilters(loadedLevel.filters ?? defaultFilters)
+            timelineRef.current = 0
+            setTimeline(0)
+        } catch (error) {
+            console.error('Unable to open level JSON.', error)
+        }
     }
 
     const exportLevel = () => {
         const _a = document.createElement('a') as HTMLAnchorElement
-        let _obj:level = {bpm, events, endpoint, objs, offset, song, volume, backgroundColor:BackgroundColor, position, rotate, scale, filters}
+        const _obj:level = {bpm, events, endpoint, objs, offset, song, volume, backgroundColor:BackgroundColor, position, rotate, scale, filters}
         _a.download = 'level.json'
-        let _blob = new Blob([JSON.stringify(_obj)], {type:'application/json'})
+        const _blob = new Blob([JSON.stringify(_obj)], {type:'application/json'})
         _a.href = URL.createObjectURL(_blob)
         _a.click()
+        URL.revokeObjectURL(_a.href)
     }
 
     async function playLevel (){
-        const audio = document.querySelector('audio') as HTMLAudioElement
-        v_playing = playing
-        if(v_playing){
+        const audio = audioRef.current
+        if (!audio) return
+
+        if(playing){
             audio.pause()
-            v_playing = false
-            setPlaying(v_playing)
+            setPlaying(false)
         } else {
-            await audio.play()
-            v_playing = true
-            setPlaying(v_playing)
+            try {
+                await audio.play()
+                setPlaying(true)
+            } catch (error) {
+                console.error('Unable to play the selected song.', error)
+                setPlaying(false)
+            }
         }
     }
 
     const v_setTimeline = (e:number) => {
-        const audio = document.querySelector('audio') as HTMLAudioElement
-        v_timeline = e
-        audio.currentTime = v_timeline+offset
-        setTimeline(v_timeline)
+        const nextTimeline = clampTimeline(e, endpoint)
+        clearSeekEpoch()
+        timelineRef.current = nextTimeline
+        if (audioRef.current && song) {
+            audioRef.current.currentTime = nextTimeline + offset
+        }
+        setTimeline(nextTimeline)
     }
 
-    // 오디오, 컨트롤바 세팅
     useEffect(() => {
-        const controls = document.querySelector('.controls') as HTMLDivElement
-        const scrowbar = document.querySelector('.scrollbar-row > div') as HTMLDivElement
-
-        const checkEnd = setInterval(() => {
-            const audio = document.querySelector('audio') as HTMLAudioElement
-            v_timeline = audio.currentTime - offset
-            setTimeline(v_timeline)
-            if(v_timeline > endpoint){
-                audio.pause()
-                audio.currentTime = offset
-                v_playing = false
-                setPlaying(v_playing)
-            }
-        }, 1)
-        // 마우스 무브 이벤트
-        function mousemove(e:MouseEvent){
-            if(cont_dragging){
-                let res:number = (endpoint * (e.clientX-rowScroll - innerWidth/100*objLine) / (innerWidth/100*(100-objLine)))/(zoom/100)
-                if(e.shiftKey){
-                    let rz = 5-Math.round(zoom/100)
-                    let f = (2**(rz < 1 ? 1 : rz))
-                    let gap = (gridLine[1] - gridLine[0]) * f
-                    res = Math.round((res-(gridOffset%gap)) / gap) * gap + (gridOffset%gap)
-                    res < gridOffset ? res = gridOffset : false
-                }
-                v_setTimeline(res < 0 ? 0 : res > endpoint ? endpoint : res)
-            } else if(scrow_dragging) {
-                // scroll logic 드래그 기능이라 무필요
+        const audio = audioRef.current
+        if (!audio) return
+        if (!song) return
+        clearSeekEpoch()
+        const sourceEpoch = sourceEpochRef.current + 1
+        sourceEpochRef.current = sourceEpoch
+        const expectedSource = new URL(song, window.location.href).href
+        const seekToImportedOffset = () => {
+            if (sourceEpochRef.current !== sourceEpoch || audio.currentSrc !== expectedSource) return
+            if (!seekAudioToLevelStart(audio, offset)) return
+            timelineRef.current = 0
+            setTimeline(0)
+        }
+        if (audio.currentSrc === expectedSource && audio.readyState >= 1) {
+            seekToImportedOffset()
+            return () => {
+                if (sourceEpochRef.current === sourceEpoch) sourceEpochRef.current += 1
             }
         }
-        // 마우스 업 이벤트
-        function mouseup(e:MouseEvent){
-            cont_dragging = false
-            scrow_dragging = false
-        }
-        // 타임라인 컨트롤바 마우스 다운 감지
-        function controls_mousedown(e:MouseEvent){
-            if(!Dragging){
-                cont_dragging = true
-                Dragging = ''
-                mousemove(e)
-            }
-        }
-        // 타임라인 스크롤바 마우스 다운 감지
-        function scrowbar_mousedown(e:MouseEvent){
-            if(!Dragging){
-                scrow_dragging = true
-                Dragging = ''
-                mousemove(e)
-            }
-        }
-        // 타임라인 밑 배생 관련 키 다운
-        const keydown = (e:KeyboardEvent) => {
-            let isNumlock = e.getModifierState('NumLock') // 넘패드 Home, 넘패드 End 를 감지하기 위한 넘버락 확인불른
-            if(e.code == 'Space'){
-                playLevel()
-            } else if(e.code == 'Home' || (e.code == 'Numpad7' && !isNumlock)){
-                v_setTimeline(0)
-            } else if(e.code == 'End' || (e.code == 'Numpad1' && !isNumlock)){
-                v_setTimeline(endpoint)
-            } else if(e.code == 'Backquote'){
-                setRowScroll(0)
-            }
-        }
-        scrowbar.addEventListener('mousedown', scrowbar_mousedown)
-        controls.addEventListener('mousedown', controls_mousedown)
-        document.addEventListener('mouseup', mouseup)
-        document.addEventListener('mousemove', mousemove)
-        document.addEventListener('keydown', keydown)
+        audio.addEventListener('loadedmetadata', seekToImportedOffset, { once:true })
         return () => {
-            clearInterval(checkEnd)
-            document.removeEventListener('keydown', keydown)
-            controls.removeEventListener('mousedown', controls_mousedown)
-            document.removeEventListener('mouseup', mouseup)
-            document.removeEventListener('mousemove', mousemove)
+            audio.removeEventListener('loadedmetadata', seekToImportedOffset)
+            if (sourceEpochRef.current === sourceEpoch) sourceEpochRef.current += 1
         }
-    }, [endpoint, playing, offset, objLine, zoom, gridLine, rowScroll, gridOffset])
+    }, [clearSeekEpoch, offset, song])
+
+    useAnimationFrame(() => {
+        const audio = audioRef.current
+        if (!audio) return
+
+        const currentTimeline = clampTimeline(audioTimeToTimeline(audio.currentTime, offset), endpoint)
+        timelineRef.current = currentTimeline
+        const result = evaluateJudgements(preparedNotes, pendingHitsRef.current, currentTimeline, judgementsRef.current)
+        pendingHitsRef.current = result.pendingHits
+        if (result.judgements !== judgementsRef.current) {
+            judgementsRef.current = result.judgements
+            setJudgements(result.judgements)
+        }
+        setTimeline(currentTimeline)
+
+        if(currentTimeline >= endpoint){
+            clearSeekEpoch()
+            audio.pause()
+            audio.currentTime = offset
+            timelineRef.current = 0
+            setTimeline(0)
+            setPlaying(false)
+        }
+    }, playing)
+
+    useEffect(() => {
+        clearSeekEpoch()
+    }, [clearSeekEpoch, preparedNotes])
+
+    const timelineMouseMove = useEffectEvent((e:MouseEvent) => {
+        const layout = layoutRef.current
+        if(!layout.controlsDragging) return
+
+        let nextTimeline = (endpoint * (e.clientX-rowScroll - innerWidth/100*objLine) / (innerWidth/100*(100-objLine)))/(zoom/100)
+        if(e.shiftKey && gridLine.length > 1){
+            const exponent = 5-Math.round(zoom/100)
+            const factor = 2**(exponent < 1 ? 1 : exponent)
+            const gap = (gridLine[1] - gridLine[0]) * factor
+            if (gap > 0) {
+                nextTimeline = Math.round((nextTimeline-(gridOffset%gap)) / gap) * gap + (gridOffset%gap)
+                nextTimeline = Math.max(nextTimeline, gridOffset)
+            }
+        }
+        v_setTimeline(nextTimeline)
+    })
+
+    const timelineKeyDown = useEffectEvent((e:KeyboardEvent) => {
+        if (isEditableTarget(e.target)) return
+
+        const isNumlock = e.getModifierState('NumLock')
+        if(e.code == 'Space'){
+            e.preventDefault()
+            void playLevel()
+        } else if(e.code == 'Home' || (e.code == 'Numpad7' && !isNumlock)){
+            v_setTimeline(0)
+        } else if(e.code == 'End' || (e.code == 'Numpad1' && !isNumlock)){
+            v_setTimeline(endpoint)
+        } else if(e.code == 'Backquote'){
+            setRowScroll(0)
+        }
+    })
+
+    useEffect(() => {
+        const controls = document.querySelector('.controls') as HTMLDivElement | null
+        const scrollbar = document.querySelector('.scrollbar-row > div') as HTMLDivElement | null
+        const layout = layoutRef.current
+
+        const mouseup = () => {
+            layout.controlsDragging = false
+            layout.scrollbarDragging = false
+        }
+        const controlsMouseDown = (e:MouseEvent) => {
+            if(!layout.dragging){
+                layout.controlsDragging = true
+                timelineMouseMove(e)
+            }
+        }
+        const scrollbarMouseDown = (e:MouseEvent) => {
+            if(!layout.dragging){
+                layout.scrollbarDragging = true
+                timelineMouseMove(e)
+            }
+        }
+
+        controls?.addEventListener('mousedown', controlsMouseDown)
+        scrollbar?.addEventListener('mousedown', scrollbarMouseDown)
+        document.addEventListener('mouseup', mouseup)
+        document.addEventListener('mousemove', timelineMouseMove)
+        document.addEventListener('keydown', timelineKeyDown)
+        return () => {
+            controls?.removeEventListener('mousedown', controlsMouseDown)
+            scrollbar?.removeEventListener('mousedown', scrollbarMouseDown)
+            document.removeEventListener('mouseup', mouseup)
+            document.removeEventListener('mousemove', timelineMouseMove)
+            document.removeEventListener('keydown', timelineKeyDown)
+        }
+    }, [])
 
     // state volume변경시 실제 오디오 볼륨을 변경하는 코드
     useEffect(() => {
-        const audio = document.querySelector('audio') as HTMLAudioElement
-        audio.volume = volume/100
+        if (audioRef.current) audioRef.current.volume = volume/100
     }, [volume])
-
-    // bpm, grid, endpoint값에 따라 그리드 리스트를 만드는 코드
-    useEffect(() => {
-        let c = (60/bpm/grid)
-        let arr = []
-        for(let i = 0; i < Math.floor((endpoint-gridOffset)/c); i++){
-            arr.push(i*c)
-        }
-        arr.push(endpoint-gridOffset)
-        setGridLine(arr)
-    }, [bpm, grid, endpoint, gridOffset])
 
     // 휠버튼으로 타임라인 이동하는 코드
     useEffect(() => {
@@ -348,15 +456,14 @@ export default function Page(){
         // 휠 이벤트
         function wheelev(e:WheelEvent){
             if(!e.altKey){
-                let res = rowScroll-e.deltaY
-                setRowScroll(res > 0 ? 0 : res)
+                setRowScroll(current => Math.min(0, current-e.deltaY))
             }
         }
         ev.addEventListener('wheel', wheelev)
         return () => {
             ev.removeEventListener('wheel', wheelev)
         }
-    }, [rowScroll])
+    }, [])
 
     // 휠버튼으로 오브젝트 스크롤 이동하는 코드
     useEffect(() => {
@@ -364,183 +471,177 @@ export default function Page(){
         // 휠 이벤트
         function wheelev(e:WheelEvent){
             if(!e.altKey){
-                let res = colScroll+(e.deltaY/100)
-                setColScroll(res <= 0 ? 0 : res)
+                setColScroll(current => Math.max(0, current+(e.deltaY/100)))
             }
         }
         ob.addEventListener('wheel', wheelev)
         return () => {
             ob.removeEventListener('wheel', wheelev)
         }
-    }, [colScroll])
+    }, [])
 
     // 오브젝트 추가 함수
     const addObj = () => {
-        let _arr:obj[] = copy(objs)
-        let _obj:obj = {anchor:[0, 0],events:[],opacity:1,position:[50, 50],rotate:0,scale:[1, 1],type:sel,visible:true}
+        const newObject:obj = {anchor:[0, 0],events:[],opacity:1,position:[50, 50],rotate:0,scale:[1, 1],type:sel,visible:true}
         if(sel == "chart"){
-            _obj['bpm'] = bpm
-            _obj['ease'] = 'linear'
-            _obj['notes'] = []
-            _obj['mcolor'] = '#ffffff'
-            _obj['jcolor'] = '#0099ff'
-            _obj['ncolor'] = '#ffffff'
-            _obj['drawer'] = 'stroke'
-            _obj['shape'] = 'arc'
-            _obj['line'] = 3
-            _obj['nline'] = 3
+            newObject.bpm = bpm
+            newObject.ease = 'linear'
+            newObject.notes = []
+            newObject.mcolor = '#ffffff'
+            newObject.jcolor = '#0099ff'
+            newObject.ncolor = '#ffffff'
+            newObject.drawer = 'stroke'
+            newObject.shape = 'arc'
+            newObject.line = 3
+            newObject.nline = 3
         } else if(sel == "sprite"){
-            _obj['src'] = ''
+            newObject.src = ''
         }
-        _arr.push(_obj)
-        setObjs(_arr)
+        setObjs(current => [...current, newObject])
     }
 
     // 오브젝트 제거 함수
-    const remObj = (_i:number) => {
-        let _arr:obj[] = copy(objs)
-        _arr.splice(_i, 1)
-        setObjs(_arr)
-    }
+    const remObj = (_i:number) => setObjs(current => current.filter((_, index) => index !== _i))
     
     // 메인 이벤트 추가 함수
     const addEv = (_opt?:event) => {
-        let _arr:event[] = copy(events)
-        let _d = _opt
-        _d ? _d.stamp = timeline : _d
-        _arr.push(_d || {stamp:timeline, type:'bgcolor', value:'#000000', duration:bpm, ease:'linear', smooth:true, speed:10, filter:'blur'})
-        _arr = _arr.sort((_a, _b) => _a.stamp - _b.stamp)
-        setEvents(_arr)
+        const stamp = timelineRef.current
+        const newEvent = _opt
+            ? { ...structuredClone(_opt), stamp }
+            : {stamp, type:'bgcolor' as const, value:'#000000', duration:bpm, ease:'linear' as const, smooth:true, speed:10, filter:'blur' as const}
+        setEvents(current => insertByStamp(current, newEvent))
     }
     
     // 메인 이벤트 제거 함수
-    const remEv = (_idx:number) => {
-        let _arr:event[] = copy(events)
-        _arr.splice(_idx, 1)
-        _arr = _arr.sort((_a, _b) => _a.stamp - _b.stamp)
-        setEvents(_arr)
-    }
+    const remEv = (_idx:number) => setEvents(current => current.filter((_, index) => index !== _idx))
     
     // 오브젝트 이벤트 추가 함수
     const addObjEv = (_i:number, _opt?:objEvent) => {
-        let _arr:obj[] = copy(objs)
-        let _d = _opt
-        _d ? _d.stamp = timeline : _d
-        _arr[_i].events.push(_d || {stamp:timeline, type:'position', value:[50, 50], ease:'linear', duration:bpm})
-        _arr[_i].events = _arr[_i].events.sort((_a, _b) => _a.stamp - _b.stamp)
-        setObjs(_arr)
+        const stamp = timelineRef.current
+        const newEvent:objEvent = _opt
+            ? { ...structuredClone(_opt), stamp }
+            : {stamp, type:'position', value:[50, 50], ease:'linear', duration:bpm}
+        setObjs(current => current.map((object, index) => index === _i
+            ? { ...object, events:insertByStamp(object.events, newEvent) }
+            : object
+        ))
     }
 
     // 오브젝트 이벤트 제거 함수
-    const remObjEv = (_oi:number, _i:number) => {
-        let _arr:obj[] = copy(objs)
-        _arr[_oi].events.splice(_i, 1)
-        _arr[_oi].events = _arr[_oi].events.sort((_a, _b) => _a.stamp - _b.stamp)
-        setObjs(_arr)
-    }
+    const remObjEv = (_oi:number, _i:number) => setObjs(current => current.map((object, objectIndex) => objectIndex === _oi
+        ? { ...object, events:object.events.filter((_, eventIndex) => eventIndex !== _i) }
+        : object
+    ))
     
     // 차트 노트 추가 함수
     const addChartNote = (_i:number) => {
-        let _arr:obj[] = copy(objs)
-        _arr[_i].notes?.push({stamp:timeline, hit:0, judge:'none'})
-        _arr[_i].notes = _arr[_i].notes?.sort((_a, _b) => _a.stamp - _b.stamp)
-        setObjs(_arr)
+        const note = {stamp:timelineRef.current, hit:0, judge:'none' as const}
+        setObjs(current => current.map((object, index) => index === _i
+            ? { ...object, notes:insertByStamp(object.notes ?? [], note) }
+            : object
+        ))
     }
 
     // 차트 노트 제거 함수
-    const remChartNote = (_oi:number, _i:number) => {
-        let _arr:obj[] = copy(objs)
-        _arr[_oi].notes?.splice(_i, 1)
-        _arr[_oi].notes = _arr[_oi].notes?.sort((_a, _b) => _a.stamp - _b.stamp)
-        setObjs(_arr)
-    }
+    const remChartNote = (_oi:number, _i:number) => setObjs(current => current.map((object, objectIndex) => objectIndex === _oi
+        ? { ...object, notes:object.notes?.filter((_, noteIndex) => noteIndex !== _i) }
+        : object
+    ))
 
     // 오브젝트 속성 설정 함수
-    const setObjProperty = (_i:number, _type:string, _v:any) => {
-        let _arr:obj[] = copy(objs)
-        if(_type == 'position'){
-            _arr[_i].position[_v[0]] = _v[1]
-        } else if(_type == 'rotate'){
-            _arr[_i].rotate = _v
-        } else if(_type == 'scale'){
-            _arr[_i].scale[_v[0]] = _v[1]
-        } else if(_type == 'opacity'){
-            _arr[_i].opacity = _v
-        } else if(_type == 'anchor'){
-            _arr[_i].anchor[_v[0]] = _v[1]
-        } else {
-            _arr[_i][_type as 'bpm'|'src'|'ease'] = _v
-        }
-        setObjs(_arr)
+    const setObjProperty = (_i:number, _type:keyof obj, _v:ObjectEditorValue) => {
+        setObjs(current => current.map((object, index) => {
+            if(index !== _i) return object
+            if(_type == 'position'){
+                const [axis, value] = _v as [0|1, number]
+                const position:[number, number] = [...object.position]
+                position[axis] = value
+                return { ...object, position }
+            }
+            if(_type == 'scale'){
+                const [axis, value] = _v as [0|1, number]
+                const scale:[number, number] = [...object.scale]
+                scale[axis] = value
+                return { ...object, scale }
+            }
+            if(_type == 'anchor'){
+                const [axis, value] = _v as [0|1, number]
+                const anchor:[number, number] = [...object.anchor]
+                anchor[axis] = value
+                return { ...object, anchor }
+            }
+            return { ...object, [_type]:_v } as obj
+        }))
     }
 
     // 메인 이벤트 설정 함수
-    const setEv = (_i:number, _t:eventProps, _v:any):void => {
-        let _arr:event[] = copy(events)
-        if(_t == 'type'){
-            if(_v == 'bgcolor'){_arr[_i].value = '#000000'}
-            else if(_v == 'filter'){_arr[_i].filter = 'blur';_arr[_i].value = 100}
-            else if(_v == 'position'){_arr[_i].value = [0, 0]}else{
-                _arr[_i].value = 100
+    const setEv = (_i:number, _t:eventProps, _v:EventEditorValue):void => {
+        setEvents(current => current.map((currentEvent, index) => {
+            if(index !== _i) return currentEvent
+            const nextEvent:event = { ...currentEvent }
+            if(_t == 'type'){
+                const eventType = String(_v)
+                if(eventType == 'bgcolor') nextEvent.value = '#000000'
+                else if(eventType == 'filter') {
+                    nextEvent.filter = 'blur'
+                    nextEvent.value = 100
+                } else if(eventType == 'position') nextEvent.value = [0, 0]
+                else nextEvent.value = 100
             }
-        }
-        _arr[_i][_t] = _t == 'value' || _t == 'speed' ? Number.isNaN(+_v) ? _v : +_v : _v
-        setEvents(_arr)
+            const numericValue = Number(_v)
+            Object.assign(nextEvent, { [_t]:_t == 'value' || _t == 'speed' ? Number.isNaN(numericValue) ? _v : numericValue : _v })
+            return nextEvent
+        }))
     }
 
     // 오브젝트 이벤트 설정 함수
-    const setObjEv = (_oi:number, _i:number, _t:objEventProps, _v:any):void => {
-        let _arr:obj[] = copy(objs)
-        if(_t == 'type'){
-            _arr[_oi].events[_i].value =
-            ['rotate'].includes(_v) ? 0 :
-            ['opacity', 'line', 'nline'].includes(_v) ? 1 :
-            _v == 'bpm' ? 100 :
-            _v == 'change' ? '' :
-            ['mcolor', 'jcolor', 'ncolor'].includes(_v) ? '#ffffff' :
-            ['position', 'scale', 'anchor'].includes(_v) ? [0, 0] :
-            _v == 'ease' ? 'linear' :
-            _v == 'drawer' ? 'stroke' :
-            _v == 'shape' ? 'arc' :
-            _v == 'visible' || ''
-        }
-        _arr[_oi].events[_i][_t] = _v
-        setObjs(_arr)
+    const setObjEv = (_oi:number, _i:number, _t:objEventProps, _v:ObjectEventEditorValue):void => {
+        setObjs(current => current.map((object, objectIndex) => {
+            if(objectIndex !== _oi) return object
+            const objectEvents = object.events.map((currentEvent, eventIndex) => {
+                if(eventIndex !== _i) return currentEvent
+                const nextEvent:objEvent = { ...currentEvent }
+                if(_t == 'type'){
+                    const eventType = String(_v)
+                    nextEvent.value =
+                    ['rotate'].includes(eventType) ? 0 :
+                    ['opacity', 'line', 'nline'].includes(eventType) ? 1 :
+                    eventType == 'bpm' ? 100 :
+                    eventType == 'change' ? '' :
+                    ['mcolor', 'jcolor', 'ncolor'].includes(eventType) ? '#ffffff' :
+                    ['position', 'scale', 'anchor'].includes(eventType) ? [0, 0] :
+                    eventType == 'ease' ? 'linear' :
+                    eventType == 'drawer' ? 'stroke' :
+                    eventType == 'shape' ? 'arc' :
+                    eventType == 'visible'
+                }
+                Object.assign(nextEvent, { [_t]:_v })
+                return nextEvent
+            })
+            return { ...object, events:objectEvents }
+        }))
     }
 
     // 오브젝트 인덱스 설정 함수
     const setObjIdx = (_i:number, _ri:number) => {
-        let _arr:obj[] = copy(objs)
-        let _exboard:obj = copy(_arr[_i])
-        _arr.splice(_i, 1)
-        let _resArr:obj[] = [..._arr.slice(0, _ri), _exboard, ..._arr.slice(_ri)]
-        setObjs(_resArr)
+        setObjs(current => {
+            const selectedObject = current[_i]
+            const remaining = current.filter((_, index) => index !== _i)
+            return [...remaining.slice(0, _ri), selectedObject, ...remaining.slice(_ri)]
+        })
     }
 
     // 차트 오프셋 전체 변경 함수
     const changeChartOffset = () => {
-        let _arr:obj[] = copy(objs)
-        _arr.forEach(v => {
-            if(v.type == 'chart'){
-                v.notes?.forEach(v2 => {
-                    v2.stamp += chartOffset
-                })
-            }
-        })
-        setObjs(_arr)
+        setObjs(current => current.map(object => object.type == 'chart'
+            ? { ...object, notes:object.notes?.map(note => ({ ...note, stamp:note.stamp + chartOffset })) }
+            : object
+        ))
     }
 
-    // 오브젝트 및 이벤트 선택 & 삭제 & 해제 & 수정
-    useEffect(() => {
-        // 글로벌 키다운 이벤트
-        function keydown(e:KeyboardEvent){
-            // 인풋태그 포커징시 단축키 입력 방지
-            const inps = document.querySelectorAll('input')
-            let iarr:boolean[] = []
-            inps.forEach(v => {
-                iarr.push(v == document.activeElement)
-            })
-            if(iarr.includes(true)) return
+    const editorKeyDown = useEffectEvent((e:KeyboardEvent) => {
+            const target = e.target
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
 
             // 옵젝 & 이벤트 삭제
             if(e.code == 'Delete'){
@@ -566,13 +667,13 @@ export default function Page(){
             // 이벤트 포커징 옮기는 코드
             } else if(e.code == 'ArrowLeft' || e.code == 'ArrowRight'){
                 if(focusing == 1 && focusEvent[0] > -1){
-                    let _evLen:number = focusEvent[0] == 0 ? events.length : objs[focusEvent[0]-1].events.length
+                    const _evLen:number = focusEvent[0] == 0 ? events.length : objs[focusEvent[0]-1].events.length
                     let _idx:number = focusEvent[1]
                     _idx += e.code == 'ArrowLeft' ? -1 : 1
                     _idx = _idx < 0 ? 0 : _idx+1 > _evLen ? _evLen-1 : _idx
                     setFocusEvent([focusEvent[0], _idx])
                 } else if(focusing == 2 && focusNote[0] > -1){
-                    let _ntLen:number = objs[focusNote[0]].notes?.length || 0
+                    const _ntLen:number = objs[focusNote[0]].notes?.length || 0
                     let _idx:number = focusNote[1]
                     _idx += e.code == 'ArrowLeft' ? -1 : 1
                     _idx = _idx < 0 ? 0 : _idx+1 > _ntLen ? _ntLen-1 : _idx
@@ -581,17 +682,19 @@ export default function Page(){
             // 이벤트 복사, 자르기, 붙여넣기 코드
             } else if((e.code == 'KeyC' || e.code == 'KeyX') && e.ctrlKey){ // 복사 & 자르기
                 if(focusEvent[0] != -1){
-                    let cb:event | objEvent = copy(focusEvent[0] == 0 ? events[focusEvent[1]] : objs[focusEvent[0]-1].events[focusEvent[1]])
+                    const cb:event | objEvent = structuredClone(focusEvent[0] == 0 ? events[focusEvent[1]] : objs[focusEvent[0]-1].events[focusEvent[1]])
                     if(e.code == 'KeyX') {
-                        focusEvent[0] == 0 ? remEv(focusEvent[1]) : remObjEv(focusEvent[0]-1, focusEvent[1])
+                        if (focusEvent[0] == 0) remEv(focusEvent[1])
+                        else remObjEv(focusEvent[0]-1, focusEvent[1])
                         setFocusEvent([-1, 0])
                     }
                     setEvClipboard(cb)
                 }
             } else if(e.code == 'KeyV' && e.ctrlKey){ // 붙여넣기
                 if(evClipboard){
-                    let isCbMainEv:boolean = (evClipboard as event).speed == undefined ? false : true
-                    focusObj == 0 ? isCbMainEv && addEv(evClipboard as event) : !isCbMainEv && addObjEv(focusObj-1, evClipboard as objEvent)
+                    const isCbMainEv:boolean = (evClipboard as event).speed != undefined
+                    if (focusObj == 0 && isCbMainEv) addEv(evClipboard as event)
+                    else if (focusObj > 0 && !isCbMainEv) addObjEv(focusObj-1, evClipboard as objEvent)
                 }
             } else if(e.code == 'KeyW'){ // 선택된 차트에 노트 추가
                 if(focusObj > 0 && objs[focusObj-1].type == 'chart'){
@@ -604,37 +707,60 @@ export default function Page(){
                     addObjEv(focusObj-1)
                 }
             } else if(['ArrowUp', 'ArrowDown'].includes(e.code) && e.shiftKey && focusing == 0 && focusObj != 0){ // 레이어 위치 바꾸기
-                let _idx:number = focusObj-1
-                let _dir:number = e.code == 'ArrowUp' ? -1 : 1
+                const _idx:number = focusObj-1
+                const _dir:number = e.code == 'ArrowUp' ? -1 : 1
                 if(_idx + _dir < 0 || _idx + _dir >= objs.length) return
                 setObjIdx(_idx, _idx + _dir)
                 setFocusObj(_idx+ 1 + _dir)
             }
-        }
+    })
 
-        document.addEventListener('keydown', keydown)
+    // 오브젝트 및 이벤트 선택 & 삭제 & 해제 & 수정
+    useEffect(() => {
+        document.addEventListener('keydown', editorKeyDown)
         return () => {
-            document.removeEventListener('keydown', keydown)
+            document.removeEventListener('keydown', editorKeyDown)
         }
-    }, [events, objs, focusEvent, focusObj, focusNote, focusing, evClipboard, timeline])
+    }, [])
 
     // 플레이
     useEffect(() => {
         if(playing){
             const keydown = (e:KeyboardEvent) => {
-                if(playKeys.includes(e.code)){
-                    let _ar:number[] = copy(hits)
-                    _ar.push(timeline)
-                    setHits(_ar)
-                }
+                const audio = audioRef.current
+                if(!audio || e.repeat || isEditableTarget(e.target) || !playKeys.includes(e.code) || !isAudioActivelyPlaying(audio)) return
+                const stamp = timelineStampFromAudio(audio, offset)
+                pendingHitsRef.current = enqueuePendingHit(pendingHitsRef.current, stamp, stamp)
             }
             document.addEventListener('keydown', keydown)
             return () => {
                 document.removeEventListener('keydown', keydown)
             }
         }
-    }, [timeline, playing, hits])
-    useEffect(() => {if(!playing) setHits([])}, [playing])
+    }, [offset, playing])
+    useEffect(() => {
+        if(!playing) {
+            clearSeekEpoch()
+        }
+    }, [clearSeekEpoch, playing])
+
+    const changeOffset = (nextOffset:number) => {
+        pauseAudioForLevelImport(audioRef.current)
+        setPlaying(false)
+        clearSeekEpoch()
+        timelineRef.current = 0
+        setTimeline(0)
+        setOffset(nextOffset)
+    }
+
+    const changeSong = (nextSong:string) => {
+        pauseAudioForLevelImport(audioRef.current)
+        setPlaying(false)
+        clearSeekEpoch()
+        timelineRef.current = 0
+        setTimeline(0)
+        setSong(nextSong)
+    }
 
     // easing
     const EaseOpts = () => {
@@ -672,29 +798,29 @@ export default function Page(){
         <div style={{height:`${100-underbarLine}%`}} className="workspace">
             <div style={{width:`${mainsetLine}%`}} className="mainset">
                 <div>
-                    <button onClick={e => reset()}>New</button>
-                    <button onClick={e => openLevel()}>Open</button>
-                    <button onClick={e => exportLevel()}>Export</button>
+                    <button onClick={() => reset()}>New</button>
+                    <button onClick={() => openLevel()}>Open</button>
+                    <button onClick={() => exportLevel()}>Export</button>
                 </div>
                 <div>
-                    <button onClick={e => v_setTimeline(0)}>Home</button>
-                    <button className="playlevel" onClick={e => playLevel()}>{playing ? 'Stop' : 'Play'}</button>
-                    <button onClick={e => v_setTimeline(endpoint)}>End</button>
+                    <button onClick={() => v_setTimeline(0)}>Home</button>
+                    <button className="playlevel" onClick={() => playLevel()}>{playing ? 'Stop' : 'Play'}</button>
+                    <button onClick={() => v_setTimeline(endpoint)}>End</button>
                 </div>
                 <hr />
                 {
                     focusObj == 0 ? <>
-                        <div><button onClick={e => changeChartOffset()}>Set Chart Offset</button><input type="text" name="" id="" value={chartOffset} onChange={e => setChartOffset(+e.target.value)} /></div>
+                        <div><button onClick={() => changeChartOffset()}>Set Chart Offset</button><input type="text" name="" id="" value={chartOffset} onChange={e => setChartOffset(+e.target.value)} /></div>
                         <div>Grid<input type="text" name="" id="" value={grid} onChange={e => setGrid(+e.target.value)} /></div>
                         <div>Grid Offset<input type="text" name="" id="" value={gridOffset} onChange={e => setGridOffset(+e.target.value)} /></div>
                         <div>BPM<input type="text" name="" id="" value={bpm} onChange={e => setBpm(+e.target.value)} /></div>
-                        <div>Offsets<input type="text" name="" id="" value={offset} onChange={e => setOffset(+e.target.value)} /></div>
-                        <div>Song<input type="text" name="" id="" value={song} onChange={e => setSong(e.target.value)} /></div>
+                        <div>Offsets<input type="text" name="" id="" value={offset} onChange={e => changeOffset(+e.target.value)} /></div>
+                        <div>Song<input type="text" name="" id="" value={song} onChange={e => changeSong(e.target.value)} /></div>
                         <div>BackgroundColor<input type="color" name="" id="" value={BackgroundColor} onChange={e => setBackgroundColor(e.target.value)}/></div>
                         <div>Volume<input type="text" name="" id="" value={volume} onChange={e => setVolume(+e.target.value)}/></div>
                         <div>Endpoint<input type="text" name="" id="" value={`${Math.floor(endpoint/60)}:${endpoint%60}`}
                         onChange={e => {
-                            let time:number[] = e.target.value.split(':').map(v => +v)
+                            const time:number[] = e.target.value.split(':').map(v => +v)
                             setEndpoint((time[0]*60 + time[1]))
                         }}/></div>
                         <div>Position<input type="number" name="" id="" value={position[0]} onChange={e => setPosition([+e.target.value, position[1]])}/>
@@ -741,7 +867,7 @@ export default function Page(){
                 }
             </div>
             <div style={{width:`${100-mainsetLine-eventsetLine}%`}} className="scene">
-                {battleEngine(timeline, hits, stageSize, {events, objs, backgroundColor:BackgroundColor, position, rotate, scale, filters}, playing)}
+                {battleEngine(timeline, stageSize, renderData, judgements, playing, 'battle-editor')}
             </div>
             <div style={{width:`${eventsetLine}%`}} className="eventset">
                 {focusEvent[0] == 0 ? <>
@@ -755,7 +881,7 @@ export default function Page(){
                         <option value="scale">Scale</option>
                     </select></div>
                     {['wiggle', 'rotate', 'scale'].includes(events[focusEvent[1]].type) && <div>Value<input type="text" name="" id=""
-                    value={events[focusEvent[1]].value} onChange={e => setEv(focusEvent[1], 'value', e.target.value)}/></div>}
+                    value={inputEventValue(events[focusEvent[1]].value)} onChange={e => setEv(focusEvent[1], 'value', e.target.value)}/></div>}
                     {['filter'].includes(events[focusEvent[1]].type) && <div>Filter Type<select name="" id="" value={events[focusEvent[1]].filter} onChange={e => setEv(focusEvent[1], 'filter', e.target.value)}>
                     <option value="blur">Blur</option>
                     <option value="dot">Dot</option>
@@ -770,15 +896,15 @@ export default function Page(){
                     <option value="rgbsplit">RGB Split</option>
                     </select></div>}
                     {['filter'].includes(events[focusEvent[1]].type) && strengthFilters.includes(events[focusEvent[1]].filter as filterType) &&
-                    <div>Strength<input type="number" name="" id="" value={events[focusEvent[1]].value} onChange={e => setEv(focusEvent[1], 'value', +e.target.value)}/></div>}
+                    <div>Strength<input type="number" name="" id="" value={inputEventValue(events[focusEvent[1]].value)} onChange={e => setEv(focusEvent[1], 'value', +e.target.value)}/></div>}
                     {['filter'].includes(events[focusEvent[1]].type) &&
                     enableFilters.includes(events[focusEvent[1]].filter as filterType) &&
                     <div>Enable<input type="checkbox" name="" id="" checked={events[focusEvent[1]].value != 0} onChange={e => setEv(focusEvent[1], 'value', e.target.checked ? 100 : 0)}/></div>}
                     {['position'].includes(events[focusEvent[1]].type) && <div>Value<input type="number" name="" id=""
-                    value={events[focusEvent[1]].value[0]} onChange={e => setEv(focusEvent[1], 'value', [+e.target.value, events[focusEvent[1]].value[1]])}/><input type="number" name="" id=""
-                    value={events[focusEvent[1]].value[1]} onChange={e => setEv(focusEvent[1], 'value', [events[focusEvent[1]].value[0], +e.target.value])}/></div>}
+                    value={vectorEventValue(events[focusEvent[1]].value)[0]} onChange={e => setEv(focusEvent[1], 'value', [+e.target.value, vectorEventValue(events[focusEvent[1]].value)[1]])}/><input type="number" name="" id=""
+                    value={vectorEventValue(events[focusEvent[1]].value)[1]} onChange={e => setEv(focusEvent[1], 'value', [vectorEventValue(events[focusEvent[1]].value)[0], +e.target.value])}/></div>}
                     {['bgcolor'].includes(events[focusEvent[1]].type) && <div>Color<input type="color" name="" id=""
-                    value={events[focusEvent[1]].value} onChange={e => setEv(focusEvent[1], 'value', e.target.value)}/></div>}
+                    value={inputEventValue(events[focusEvent[1]].value)} onChange={e => setEv(focusEvent[1], 'value', e.target.value)}/></div>}
                     {['filter', 'bgcolor', 'wiggle', 'position', 'rotate', 'scale'].includes(events[focusEvent[1]].type) &&
                     (events[focusEvent[1]].type == 'filter' ? strengthFilters.includes(events[focusEvent[1]].filter as filterType) : true) && <div>Duration<input type="number" name="" id=""
                     value={events[focusEvent[1]].duration} onChange={e => setEv(focusEvent[1], 'duration', +e.target.value)}/></div>}
@@ -815,18 +941,18 @@ export default function Page(){
                     {['position', 'rotate', 'scale', 'opacity', 'anchor', 'bpm', 'mcolor', 'jcolor', 'ncolor', 'line', 'nline'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) && <div>Ease<select name="" id=""
                     value={objs[focusEvent[0]-1].events[focusEvent[1]].ease} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'ease', e.target.value)}>{EaseOpts()}</select></div>}
                     {['mcolor', 'jcolor', 'ncolor'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Color Value<input type="color" name="" id=""
-                    value={objs[focusEvent[0]-1].events[focusEvent[1]].value} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}/></div> :
+                    value={inputEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}/></div> :
                     ['rotate', 'opacity', 'bpm', 'change', 'line', 'nline'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Value<input type="text" name="" id=""
-                    value={objs[focusEvent[0]-1].events[focusEvent[1]].value} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}/></div>:
+                    value={inputEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}/></div>:
                     ['position', 'scale', 'anchor'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Value<input type="number" name="" id=""
-                    value={objs[focusEvent[0]-1].events[focusEvent[1]].value[0]} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', [+e.target.value, objs[focusEvent[0]-1].events[focusEvent[1]].value[1]])}/>
-                    <input type="number" name="" id="" value={objs[focusEvent[0]-1].events[focusEvent[1]].value[1]} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', [objs[focusEvent[0]-1].events[focusEvent[1]].value[0], +e.target.value])}/></div>:
+                    value={vectorEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)[0]} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', [+e.target.value, vectorEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)[1]])}/>
+                    <input type="number" name="" id="" value={vectorEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)[1]} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', [vectorEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)[0], +e.target.value])}/></div>:
                     ['ease'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>EaseType<select name="" id="" value={objs[focusEvent[0]-1].events[focusEvent[1]].ease} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'ease', e.target.value)}>{EaseOpts()}</select></div>:
                     ['visible'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Visible<input type="checkbox" name="" id=""
-                    checked={objs[focusEvent[0]-1].events[focusEvent[1]].value} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.checked)}/></div>:
-                    ['drawer'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Note Drawer<select name="" id="" value={objs[focusEvent[0]-1].events[focusEvent[1]].value} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}>
+                    checked={booleanEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.checked)}/></div>:
+                    ['drawer'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Note Drawer<select name="" id="" value={inputEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}>
                     <option value="stroke">Stroke</option><option value="fill">Fill</option></select></div>:
-                    ['shape'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Note Shape<select name="" id="" value={objs[focusEvent[0]-1].events[focusEvent[1]].value} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}>
+                    ['shape'].includes(objs[focusEvent[0]-1].events[focusEvent[1]].type) ? <div>Note Shape<select name="" id="" value={inputEventValue(objs[focusEvent[0]-1].events[focusEvent[1]].value)} onChange={e => setObjEv(focusEvent[0]-1, focusEvent[1], 'value', e.target.value)}>
                     <option value="arc">Arc</option><option value="rect">Rect</option></select></div>:<></>
                     }
                 </>:<></>}
@@ -840,14 +966,14 @@ export default function Page(){
                         <option value="chart">Chart</option>
                         <option value="sprite">Sprite</option>
                     </select>
-                    <button onClick={e => addObj()}>+</button></div>
+                    <button onClick={() => addObj()}>+</button></div>
                 </div>
                 {Math.round(colScroll) <= 0 && <div className={focusObj == 0 ? 'selected' : ''}
-                onClick={e => {setFocusObj(0);setFocusing(0)}}>Main<button onClick={e => addEv()}>Add Event</button></div>}
+                onClick={() => {setFocusObj(0);setFocusing(0)}}>Main<button onClick={() => addEv()}>Add Event</button></div>}
                 {objs.map((v, i) => (
-                    Math.round(colScroll) <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={e => {setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
-                    {v.type == 'chart' && <button onClick={e => addChartNote(i)}>Add Note</button>}
-                    <button onClick={e => addObjEv(i)}>Add Event</button></div>
+                    Math.round(colScroll) <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
+                    {v.type == 'chart' && <button onClick={() => addChartNote(i)}>Add Note</button>}
+                    <button onClick={() => addObjEv(i)}>Add Event</button></div>
                 ))}
             </div>
             <div style={{width:`${100-objLine}%`}} className="timeline">
@@ -871,7 +997,7 @@ export default function Page(){
                             (condset[0] /100 * (100-objLine) * v.stamp / endpoint)*(zoom/100) + rowScroll >= 0 &&
                             <div key={i} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v.stamp / endpoint)*(zoom/100) + rowScroll - 8}px`}}
                             className={`box ${focusEvent[0] == 0 && focusEvent[1] == i ? 'selected' : ''}`}
-                            onClick={e => {setFocusEvent([0, i]);setFocusing(1)}}></div>
+                            onClick={() => {setFocusEvent([0, i]);setFocusing(1)}}></div>
                             ))}
                     </div>}
                     {objs.map((v, i) => (
@@ -880,13 +1006,13 @@ export default function Page(){
                                 (condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll >= 0 &&
                                 <div key={i2} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll - 8}px`}}
                                 className={`box ${focusEvent[0] == i+1 && focusEvent[1] == i2 ? 'selected' : ''}`}
-                                onClick={e => {setFocusEvent([i+1, i2]);setFocusing(1)}}></div>
+                                onClick={() => {setFocusEvent([i+1, i2]);setFocusing(1)}}></div>
                             ))}
                             {v.type == 'chart' ? v.notes?.map((v2, i2) => (
                                 (condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll >= 0 &&
                                 <div key={i2} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll - 8}px`}}
                                 className={`note ${focusNote[0] == i && focusNote[1] == i2 ? 'selected' : ''}`}
-                                onClick={e => {setFocusNote([i, i2]);setFocusing(2)}}></div>
+                                onClick={() => {setFocusNote([i, i2]);setFocusing(2)}}></div>
                             )) : <></>}
                         </div>
                     ))}
@@ -896,7 +1022,24 @@ export default function Page(){
                 marginLeft:`${((condset[0] /100 * (100-objLine))-(condset[0] /100 * (100-objLine)/(zoom/100)))*(-rowScroll)/((condset[0] /100 * (100-objLine)) * (zoom/100) - (condset[0] /100 * (100-objLine)))}px`}}></div></div>
             </div>
         </div>
-        <input type="file" name="" id="fileInput" style={{display:'none'}} />
-        <audio src={song} style={{display:'none'}}></audio>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleLevelFile} style={{display:'none'}} />
+        <audio
+            ref={audioRef}
+            data-testid="editor-audio"
+            src={song || undefined}
+            preload="auto"
+            style={{display:'none'}}
+            onCanPlayThrough={event => {
+                if (mediaSourceMatches(event.currentTarget.currentSrc, song, window.location.href)) audioTask.complete()
+            }}
+            onPlaying={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onWaiting={() => setPlaying(false)}
+            onEnded={() => setPlaying(false)}
+            onError={event => {
+                if (!mediaSourceMatches(event.currentTarget.currentSrc, song, window.location.href)) return
+                audioTask.fail(createRuntimeAssetFailure(song, new Error('Editor audio failed to decode.')))
+            }}
+        ></audio>
     </div>
 }

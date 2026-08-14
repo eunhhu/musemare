@@ -1,51 +1,46 @@
 'use client'
 
-import { useContext, useEffect, useState } from "react"
+import Image from 'next/image'
+import { useCallback, useContext, useEffect } from "react"
+import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
 import { globalContext } from "../main"
 import { toLang } from "../data/lang"
+import { createRuntimeAssetFailure } from '../logic/runtimeAssets'
 
 export default function Index(){
-    const {afterBattleScene, setAfterBattleScene} = useContext(globalContext)
-    const {battleCode, setBattleCode} = useContext(globalContext)
-    const {scene, setScene} = useContext(globalContext)
-    const {lang, setLang} = useContext(globalContext)
-    const [canSkip, setCanSkip] = useState<boolean>(false)
-    const [brightness, setBrightness] = useState<number>(1)
-    const [b_event ,setB_event] = useState<string>('')
+    const {setAfterBattleScene, setScene, lang} = useContext(globalContext)
+    const backgroundTask = useRuntimeTask('asset', '/assets/background/menubg.png')
+    useRuntimeRoute('intro')
 
-    const endWith = (str:string) => {
-        setB_event(str)
-    }
+    const continueToSelector = useCallback(() => {
+        setAfterBattleScene('Selector')
+        setScene('Selector')
+    }, [setAfterBattleScene, setScene])
 
     useEffect(() => {
-        if(b_event != ''){
-            let t = 1
-            let loop = setInterval(() => {
-                t -= 0.02
-                setBrightness(t)
-                if(t <= 0) {
-                    clearInterval(loop)
-                    setScene(b_event)
-                }
-            }, 1)
+        const keydown = (event: KeyboardEvent) => {
+            if(event.code == 'KeyF'){
+                continueToSelector()
+            }
         }
-    }, [b_event])
+        window.addEventListener('keydown', keydown)
+        return () => window.removeEventListener('keydown', keydown)
+    }, [continueToSelector])
 
-    useEffect(() => {
-        setTimeout(() => {
-            setCanSkip(true)
-            window.addEventListener('keydown', e => {
-                if(e.code == 'KeyF'){
-                    endWith('Selector')
-                    setAfterBattleScene('Selector')
-                }
-            })
-        }, 1000);
-    }, [])
-
-    return <div style={{filter:`brightness(${brightness})`}} className="Intro">
-        <video className="Intro-vid" onEnded={e => setScene('Battle')} autoPlay={true} controls={false}
-        src="assets/video/testvid.mp4" muted={true}></video>
-        {canSkip && <div className="skip">{toLang(lang, 'press skip')}</div>}
+    return <div className="Intro Intro-fallback">
+        <Image
+            src="/assets/background/menubg.png"
+            alt=""
+            fill={true}
+            priority={true}
+            sizes="100vw"
+            onLoad={backgroundTask.complete}
+            onError={() => backgroundTask.fail(createRuntimeAssetFailure('/assets/background/menubg.png', new Error('Intro background failed to decode.')))}
+        />
+        <div className="Intro-fallback-content">
+            <p>The intro video is not included in this repository.</p>
+            <button type="button" onClick={continueToSelector}>Continue</button>
+            <div className="skip">{toLang(lang, 'press skip')}</div>
+        </div>
     </div>
 }

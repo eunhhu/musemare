@@ -4,6 +4,7 @@ export type mainEvType = 'bgcolor'|'filter'|'wiggle'|'position'|'rotate'|'scale'
 export type filterType = 'blur'|'dot'|'motionBlur'|'bloom'|'godray'|'convolution'|'glitch'|'grayscale'|'noise'|'pixelate'|'rgbsplit'
 export type judge = 'perfect'|'good'|'miss'|'none'
 export type drawer = 'fill'|'stroke'
+export type eventValue = number|string|boolean|[number, number]
 
 export type EmptyProps = {
     children?: ReactNode;
@@ -66,7 +67,7 @@ export interface exevent{
 }
 export interface script{
     type:scriptType;
-    value:any;
+    value:unknown;
 }
 export interface mevent{
     eventName:string;
@@ -163,7 +164,7 @@ export interface filter{
 export interface event{
     stamp:number;
     type:mainEvType;
-    value?:any;
+    value?:eventValue;
     duration?:number;
     filter?:filterType;
     smooth?:boolean;
@@ -175,7 +176,7 @@ export type eventProps = 'stamp'|'type'|'value'|'duration'|'ease'|'speed'|'smoot
 export interface objEvent{
     stamp:number;
     type:objEvType
-    value?:any;
+    value?:eventValue;
     duration?:number;
     ease?:ease;
 }

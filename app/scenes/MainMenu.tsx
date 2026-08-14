@@ -1,60 +1,52 @@
 'use client'
 
-import { useContext, useEffect, useState } from "react"
+import Image from 'next/image'
+import { useContext } from "react"
+import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
 import { globalContext } from "../main"
 import { toLang } from "../data/lang"
+import { useSceneFade } from "../hooks/useSceneFade"
+import { createRuntimeAssetFailure } from '../logic/runtimeAssets'
 
 export default function Index(){
-    const {lang, setLang} = useContext(globalContext)
-    const {scene, setScene} = useContext(globalContext)
-    const [blur, setBlur] = useState<number>(0)
-    const [brightness, setBrightness] = useState<number>(0)
-    const [b_event ,setB_event] = useState<string>('')
+    const {lang, setScene} = useContext(globalContext)
+    const { style, transitionTo } = useSceneFade(setScene)
+    const titleTask = useRuntimeTask('asset', '/assets/ui/title.svg')
+    const backgroundTask = useRuntimeTask('asset', '/assets/background/menubg.png')
+    useRuntimeRoute('main-menu')
 
     const buttonInput = (str:string) => {
-        if(b_event == ''){
-            str == 'credits' ? endWith('Credits') :
-            str == 'settings' ? endWith('Settings') :
-            str == 'new game' ? endWith('Intro') :
-            str == 'continue' && endWith('Selector')
-        }
-    }
-    const endWith = (str:string) => {
-        setB_event(str)
+        if (str == 'credits') transitionTo('Credits')
+        else if (str == 'settings') transitionTo('Settings')
+        else if (str == 'new game') transitionTo('Intro')
+        else if (str == 'continue') transitionTo('Selector')
     }
 
-    useEffect(() => {
-        if(b_event != ''){
-            let t = 1
-            let loop = setInterval(() => {
-                t -= 0.02
-                setBrightness(t)
-                if(t <= 0) {
-                    clearInterval(loop)
-                    setScene(b_event)
-                }
-            }, 1)
-        }
-    }, [b_event])
-
-    useEffect(() => {
-        let t = 0
-        let loop = setInterval(() => {
-            t += 0.02
-            setBrightness(t)
-            if(t >= 1) clearInterval(loop)
-        }, 1)
-    
-    }, [])
-
-    return <div style={{filter:`blur(${blur}px) brightness(${brightness})`}}
+    return <div style={style}
     className="MainMenu fullscreen blackbg">
-        <video src="assets/video/menubg.mp4" muted={true} autoPlay={true} loop={true}></video>
+        <Image
+            className="MainMenu-background"
+            src="/assets/background/menubg.png"
+            alt=""
+            fill={true}
+            priority={true}
+            sizes="100vw"
+            onLoad={backgroundTask.complete}
+            onError={() => backgroundTask.fail(createRuntimeAssetFailure('/assets/background/menubg.png', new Error('Menu background failed to decode.')))}
+        />
         <div>
-            <img src="assets/ui/title.svg" alt="" />
+            <Image
+                src="/assets/ui/title.svg"
+                alt="MuseMare"
+                width={983}
+                height={225}
+                priority={true}
+                onLoad={titleTask.complete}
+                onError={() => titleTask.fail(createRuntimeAssetFailure('/assets/ui/title.svg', new Error('Title image failed to decode.')))}
+            />
             <div className="menu">
                 {['new game', 'continue', 'settings', 'credits'].map((v, i) => (
-                    <div key={i} onClick={e => buttonInput(v)}>{toLang(lang, v)}</div>
+                    <div key={i} onClick={() => buttonInput(v)}>{toLang(lang, v)}</div>
                 ))}
             </div>
         </div>
