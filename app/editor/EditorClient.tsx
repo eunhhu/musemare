@@ -1479,7 +1479,6 @@ export default function Page(){
                     stageSize={stageSize}
                     renderData={renderData}
                     judgements={judgements}
-                    playing={playing}
                     surfaceLabel="battle-editor"
                 />
                 <div

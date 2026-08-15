@@ -5,7 +5,14 @@ import { PixiAssetSprite } from '../components/PixiAssetSprite'
 import { ResponsivePixiApplication } from '../components/ResponsivePixiApplication'
 import type { battleRenderData, drawer, ease, eventValue, filterType, obj } from '../data/types'
 import { Easing, calcEventColor, calcEventValue, enableFilters, getPos, parseHex } from '../data/utils'
-import { resolveObjectBpmAt, type JudgementRecord, type JudgementState, type NoteId } from '../logic/battleDomain'
+import { resolveObjectBpmAt, type JudgementState, type NoteId } from '../logic/battleDomain'
+import {
+    getJudgementFeedbackFrame,
+    getRecentJudgementsForObject,
+    judgementFeedbackVisuals,
+    type JudgementFeedbackFrame,
+    type JudgementFeedbackVisual,
+} from '../logic/battleFeedback'
 import { BattleFilterRegistry } from '../logic/battleFilters'
 import { evaluateWiggle } from '../logic/wiggle'
 
@@ -15,6 +22,23 @@ extend({
     Sprite: PIXI.Sprite,
     Text: PIXI.Text,
 })
+
+const chartJudgementX = -200
+
+const judgementTextStyles = Object.fromEntries(Object.entries(judgementFeedbackVisuals).map(([judge, visual]) => [
+    judge,
+    new PIXI.TextStyle({
+        align:'center',
+        fontFamily:['Inter', 'Arial Black', 'Arial', 'sans-serif'],
+        fontSize:30,
+        fontWeight:'900',
+        letterSpacing:1.8,
+        fill:visual.color,
+        padding:8,
+        stroke:{ color:0x080b10, width:5, join:'round' },
+        dropShadow:{ color:0x000000, alpha:0.72, blur:4, distance:3, angle:Math.PI / 2 },
+    }),
+])) as Record<keyof typeof judgementFeedbackVisuals, PIXI.TextStyle>
 
 function vectorEventValue(value:eventValue | undefined):[number, number] {
     return Array.isArray(value) ? value : [0, 0]
@@ -53,7 +77,7 @@ function chartDraw(
     graphics.rect(-250 + line / 2, 1 - line / 2, 500, line).fill(parseHex(mainColor))
     graphics.rect(-250 + line / 2, -25, line, 50).fill(parseHex(mainColor))
     graphics.rect(250 - line / 2, -25, line, 50).fill(parseHex(mainColor))
-    graphics.rect(-200 + line / 2, -25, line, 50).fill(parseHex(judgementColor))
+    graphics.rect(chartJudgementX + line / 2, -25, line, 50).fill(parseHex(judgementColor))
 
     object.notes?.forEach((note, noteIndex) => {
         const noteId = `${objectIndex}:${noteIndex}` as NoteId
@@ -67,7 +91,7 @@ function chartDraw(
             return
         }
 
-        const x = -200 + 450 * timing + line
+        const x = chartJudgementX + 450 * timing + line
         if (shape === 'arc') {
             graphics.circle(x, 0, 25)
         } else {
@@ -123,62 +147,73 @@ function BattleSceneContainer({
     </pixiContainer>
 }
 
-function latestJudgementForObject(objectIndex: number, judgements: JudgementState) {
-    const prefix = `${objectIndex}:`
-    return Object.entries(judgements).reduce<JudgementRecord | undefined>((latest, [noteId, record]) => {
-        if (!noteId.startsWith(prefix) || (latest && latest.hit >= record.hit)) {
-            return latest
-        }
-        return record
-    }, undefined)
+function feedbackSeed(noteId:NoteId) {
+    return noteId.split(':').reduce((seed, part) => seed * 31 + Number(part), 17)
 }
 
-function renderJudgement(
-    object: obj,
-    objectIndex: number,
-    timeline: number,
-    stageSize: [number, number],
-    judgements: JudgementState,
+function drawJudgementImpact(
+    graphics:PIXI.Graphics,
+    noteId:NoteId,
+    frame:JudgementFeedbackFrame,
+    visual:JudgementFeedbackVisual,
 ) {
-    if (object.type !== 'chart' || !object.visible) {
-        return null
+    graphics.clear()
+    const alpha = frame.impactAlpha * visual.strength
+    const strokeWidth = Math.max(1.25, 4.5 * (1 - frame.progress))
+
+    graphics
+        .circle(chartJudgementX, 0, frame.ringRadius)
+        .stroke({ color:visual.color, width:strokeWidth, alpha })
+        .circle(chartJudgementX, 0, frame.ringRadius * 0.62)
+        .stroke({ color:0xffffff, width:Math.max(1, strokeWidth * 0.45), alpha:alpha * 0.7 })
+        .circle(chartJudgementX, 0, Math.max(2, 8 * (1 - frame.progress)))
+        .fill({ color:visual.color, alpha:Math.min(1, alpha * 1.35) })
+        .rect(chartJudgementX - 2.5, -30, 5, 60)
+        .fill({ color:visual.color, alpha:alpha * 0.42 })
+
+    const seedAngle = feedbackSeed(noteId) * 0.37
+    for (let particle = 0; particle < visual.particleCount; particle += 1) {
+        const angle = seedAngle + particle / visual.particleCount * Math.PI * 2
+        const distance = frame.particleDistance * (0.78 + particle % 3 * 0.12)
+        const radius = Math.max(0.8, (3.4 - particle % 2 * 0.7) * (1 - frame.progress * 0.72))
+        graphics
+            .circle(
+                chartJudgementX + Math.cos(angle) * distance,
+                Math.sin(angle) * distance,
+                radius,
+            )
+            .fill({ color:particle % 3 === 0 ? 0xffffff : visual.color, alpha:alpha * 0.95 })
     }
 
-    const judgement = latestJudgementForObject(objectIndex, judgements)
-    if (!judgement || timeline - judgement.hit >= 0.5) {
-        return null
+    if (visual.label === 'MISS') {
+        const crossRadius = 9 + frame.progress * 7
+        graphics
+            .moveTo(chartJudgementX - crossRadius, -crossRadius)
+            .lineTo(chartJudgementX + crossRadius, crossRadius)
+            .moveTo(chartJudgementX + crossRadius, -crossRadius)
+            .lineTo(chartJudgementX - crossRadius, crossRadius)
+            .stroke({ color:visual.color, width:Math.max(2, strokeWidth), alpha })
     }
+}
 
-    const fill = judgement.judge === 'perfect'
-        ? 0x33ff00
-        : judgement.judge === 'great'
-            ? 0x44ddff
-            : judgement.judge === 'good'
-                ? 0xdddd00
-                : judgement.judge === 'bad'
-                    ? 0xff8800
-                    : 0xdd0000
-    const position = getPos(object.position, stageSize)
-
-    return <pixiText
-        key={objectIndex}
-        text={judgement.judge.toUpperCase()}
-        style={new PIXI.TextStyle({
-            align: 'center',
-            fontFamily: 'Arial',
-            fontSize: 20,
-            fontWeight: '700',
-            letterSpacing: 1,
-            fill,
-            fontStyle: 'normal',
-        })}
-        x={position[0]}
-        y={position[1]}
-        rotation={object.rotate * Math.PI / 180}
-        scale={{ x: object.scale[0], y: object.scale[1] }}
-        alpha={object.opacity}
-        pivot={{ x: object.anchor[0] * 5 + 230, y: object.anchor[1] * 0.5 + 50 }}
-    />
+function renderJudgementFeedback(objectIndex:number, timeline:number, judgements:JudgementState) {
+    return getRecentJudgementsForObject(objectIndex, judgements, timeline).map(({ noteId, record }) => {
+        const frame = getJudgementFeedbackFrame(record, timeline)
+        if (!frame) return null
+        const visual = judgementFeedbackVisuals[record.judge]
+        return <pixiContainer key={`judgement-${noteId}`}>
+            <pixiGraphics draw={graphics => drawJudgementImpact(graphics, noteId, frame, visual)} />
+            <pixiText
+                text={visual.label}
+                style={judgementTextStyles[record.judge]}
+                x={chartJudgementX}
+                y={frame.textY}
+                anchor={0.5}
+                scale={{ x:frame.textScale, y:frame.textScale }}
+                alpha={frame.textAlpha}
+            />
+        </pixiContainer>
+    })
 }
 
 function applyEvents(base: battleRenderData, timeline: number) {
@@ -249,7 +284,6 @@ export type BattleRendererProps = {
     stageSize:[number, number]
     renderData:battleRenderData
     judgements?:JudgementState
-    playing?:boolean
     surfaceLabel?:string
 }
 
@@ -258,7 +292,6 @@ export function BattleRenderer({
     stageSize,
     renderData,
     judgements = {},
-    playing = false,
     surfaceLabel = 'battle',
 }:BattleRendererProps) {
     const base = createRenderFrame(renderData)
@@ -295,22 +328,21 @@ export function BattleRenderer({
                     />
                 }
                 if (object.type === 'chart' && object.visible) {
-                    return <pixiGraphics
+                    return <pixiContainer
                         key={objectIndex}
-                        draw={graphics => chartDraw(graphics, object, objectIndex, timeline, judgements)}
                         x={objectPosition[0]}
                         y={objectPosition[1]}
                         rotation={object.rotate * Math.PI / 180}
                         scale={{ x: object.scale[0] * globalSize, y: object.scale[1] * globalSize }}
                         alpha={object.opacity}
                         pivot={{ x: object.anchor[0] * 5, y: object.anchor[1] * 0.5 }}
-                    />
+                    >
+                        <pixiGraphics draw={graphics => chartDraw(graphics, object, objectIndex, timeline, judgements)} />
+                        {renderJudgementFeedback(objectIndex, timeline, judgements)}
+                    </pixiContainer>
                 }
                 return null
             })}
-            {playing && base.objs.map((object, objectIndex) => (
-                renderJudgement(object, objectIndex, timeline, stageSize, judgements)
-            ))}
         </BattleSceneContainer>
     </ResponsivePixiApplication>
 }

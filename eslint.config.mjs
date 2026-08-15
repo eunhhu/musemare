@@ -40,7 +40,7 @@ export default defineConfig([
                 varsIgnorePattern:'^_',
             }],
             'react/no-unknown-property':['error', {
-                ignore:['alpha', 'draw', 'pivot', 'rotation', 'text', 'texture'],
+                ignore:['alpha', 'anchor', 'draw', 'pivot', 'rotation', 'text', 'texture'],
             }],
         },
     },

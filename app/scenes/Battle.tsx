@@ -62,7 +62,6 @@ function BattleAttempt({
 }:PlayableBattleProps & { onRetry:() => void }) {
     const { width, height } = useWindowSize()
     const [timeline, setTimeline] = useState(0)
-    const [audioPlaying, setAudioPlaying] = useState(false)
     const {
         mediaRef:audioRef,
         elementRef:audioElementRef,
@@ -106,7 +105,6 @@ function BattleAttempt({
 
         if (result.gauge.failed) {
             audio.pause()
-            setAudioPlaying(false)
             return
         }
 
@@ -166,10 +164,6 @@ function BattleAttempt({
                 event.currentTarget.currentTime = Math.max(levelData.offset, 0)
             }}
             onCanPlayThrough={event => completeAudio(event.currentTarget)}
-            onPlaying={() => setAudioPlaying(true)}
-            onPause={() => setAudioPlaying(false)}
-            onWaiting={() => setAudioPlaying(false)}
-            onEnded={() => setAudioPlaying(false)}
             onError={event => failAudio(event.currentTarget)}
         />
         <BattleRenderer
@@ -177,7 +171,6 @@ function BattleAttempt({
             stageSize={[width, height]}
             renderData={renderData}
             judgements={judgements}
-            playing={audioPlaying}
             surfaceLabel="battle"
         />
         <BattleGauge gauge={gauge} />
