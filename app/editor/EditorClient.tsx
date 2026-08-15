@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import {
+    useCallback,
+    useEffect,
+    useEffectEvent,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ChangeEvent,
+    type KeyboardEvent as ReactKeyboardEvent,
+    type PointerEvent as ReactPointerEvent,
+} from "react"
 import { BattleGauge } from '../components/BattleGauge'
 import { useRuntimeRoute } from '../components/RuntimeStatus'
 import { enableFilters, strengthFilters } from "../data/utils"
@@ -32,6 +43,20 @@ import {
     timelineScrollMetrics,
     timelineStampAtPixel,
 } from '../logic/editorLayout'
+import {
+    allTimelineNodes,
+    deleteTimelineNodes,
+    moveTimelineNodes,
+    parseTimelineNodeKey,
+    selectTimelineNode,
+    snapTimelineStamp,
+    sortTimelineNodes,
+    timelineNodeKey,
+    timelineNodeStamp,
+    uniqueTimelineNodes,
+    type TimelineNodeContent,
+    type TimelineNodeRef,
+} from '../logic/editorTimelineNodes'
 import { useEditorLayout } from './useEditorLayout'
 
 type ObjectEditorValue = string | number | boolean | [0|1, number]
@@ -39,6 +64,26 @@ type EventEditorValue = event[eventProps]
 type ObjectEventEditorValue = objEvent[objEventProps]
 type EventClipboard = { scope:'main', value:event } | { scope:'object', value:objEvent }
 type EditorPlaytestStatus = 'idle' | 'running' | 'paused' | 'failed' | 'cleared'
+type TimelineNodeDrag = {
+    pointerId:number
+    startClientX:number
+    baseline:TimelineNodeContent
+    selection:TimelineNodeRef[]
+    target:TimelineNodeRef
+    delta:number
+    moved:boolean
+    captureElement:HTMLElement
+}
+type TimelineMarquee = {
+    pointerId:number
+    startClientX:number
+    startClientY:number
+    currentClientX:number
+    currentClientY:number
+    baseSelection:TimelineNodeRef[]
+    additive:boolean
+    captureElement:HTMLElement
+}
 
 function inputEventValue(value:eventValue | undefined):string | number {
     return typeof value === 'string' || typeof value === 'number' ? value : ''
@@ -107,6 +152,9 @@ export default function Page(){
     const [focusNote, setFocusNote] = useState<[number, number]>([-1, 0]) // obj's idx, index
     const [focusObj, setFocusObj] = useState<number>(0)
     const [focusing, setFocusing] = useState<number>(0) // 0 = obj, 1 = event, 2 = note
+    const [timelineSelection, setTimelineSelection] = useState<TimelineNodeRef[]>([])
+    const [timelineNodesDragging, setTimelineNodesDragging] = useState(false)
+    const [timelineMarquee, setTimelineMarquee] = useState<TimelineMarquee | null>(null)
     const [evClipboard, setEvClipboard] = useState<EventClipboard>()
     const {
         mediaRef:audioRef,
@@ -118,6 +166,7 @@ export default function Page(){
     const timelineRef = useRef(0)
     const timelineElementRef = useRef<HTMLDivElement>(null)
     const controlsRef = useRef<HTMLDivElement>(null)
+    const eventsElementRef = useRef<HTMLDivElement>(null)
     const objectsRef = useRef<HTMLDivElement>(null)
     const scrollbarTrackRef = useRef<HTMLDivElement>(null)
     const scrollbarThumbRef = useRef<HTMLDivElement>(null)
@@ -129,6 +178,8 @@ export default function Page(){
     const [judgements, setJudgements] = useState<JudgementState>({})
     const gaugeRef = useRef(createBattleGaugeState())
     const sourceEpochRef = useRef(0)
+    const timelineNodeDragRef = useRef<TimelineNodeDrag | null>(null)
+    const timelineMarqueeRef = useRef<TimelineMarquee | null>(null)
     const clearSeekEpoch = useCallback(() => {
         clearEditorSeekEpoch(pendingHitsRef, judgementsRef, setJudgements)
     }, [])
@@ -165,6 +216,38 @@ export default function Page(){
     }, [preparedNotes])
     const timelineViewportWidth = timelineWidth || Math.max(1, condset[0] / 100 * (100 - objLine))
     const timelinePixel = (stamp:number) => timelinePixelAt(stamp, endpoint, timelineViewportWidth, zoom, rowScroll)
+    const selectedTimelineNodeKeys = useMemo(
+        () => new Set(timelineSelection.map(timelineNodeKey)),
+        [timelineSelection],
+    )
+
+    const focusTimelineNode = (node:TimelineNodeRef | undefined) => {
+        if (!node) {
+            setFocusEvent([-1, 0])
+            setFocusNote([-1, 0])
+            setFocusing(0)
+        } else if (node.kind === 'main-event') {
+            setFocusEvent([0, node.index])
+            setFocusNote([-1, 0])
+            setFocusing(1)
+        } else if (node.kind === 'object-event') {
+            setFocusEvent([node.objectIndex + 1, node.index])
+            setFocusNote([-1, 0])
+            setFocusing(1)
+        } else {
+            setFocusEvent([-1, 0])
+            setFocusNote([node.objectIndex, node.index])
+            setFocusing(2)
+        }
+    }
+
+    const applyTimelineSelection = (selection:TimelineNodeRef[]) => {
+        const unique = uniqueTimelineNodes(selection)
+        setTimelineSelection(unique)
+        focusTimelineNode(unique.at(-1))
+    }
+
+    const clearTimelineSelection = () => applyTimelineSelection([])
     useRuntimeRoute('battle-editor')
 
     useLayoutEffect(() => {
@@ -200,9 +283,7 @@ export default function Page(){
         setObjs([])
         setFilters(defaultFilters)
         setEvClipboard(undefined)
-        setFocusEvent([-1, 0])
-        setFocusing(0)
-        setFocusNote([-1, 0])
+        clearTimelineSelection()
         setFocusObj(0)
         setImportError(null)
         v_setTimeline(0)
@@ -235,9 +316,7 @@ export default function Page(){
             setRotate(loadedLevel.rotate)
             setScale(loadedLevel.scale)
             setFilters(loadedLevel.filters ?? defaultFilters)
-            setFocusEvent([-1, 0])
-            setFocusing(0)
-            setFocusNote([-1, 0])
+            clearTimelineSelection()
             setFocusObj(0)
             setEvClipboard(undefined)
             setRowScroll(0)
@@ -401,6 +480,197 @@ export default function Page(){
         setPlaying(false)
         resetPlaytestState()
     }, [audioRef, chartTopologyKey, resetPlaytestState])
+
+    const timelineNodePointerDown = (pointer:ReactPointerEvent<HTMLDivElement>, node:TimelineNodeRef) => {
+        if (playing || pointer.button !== 0) return
+        pointer.preventDefault()
+        pointer.stopPropagation()
+
+        const key = timelineNodeKey(node)
+        const isSelected = selectedTimelineNodeKeys.has(key)
+        let nextSelection:TimelineNodeRef[]
+        if (pointer.metaKey || pointer.ctrlKey) {
+            nextSelection = selectTimelineNode(timelineSelection, node, 'toggle')
+        } else if (pointer.shiftKey) {
+            nextSelection = selectTimelineNode(timelineSelection, node, 'range')
+        } else {
+            nextSelection = isSelected ? timelineSelection : selectTimelineNode(timelineSelection, node, 'replace')
+        }
+        applyTimelineSelection(nextSelection)
+        if (!nextSelection.some(selected => timelineNodeKey(selected) === key)) return
+
+        pointer.currentTarget.setPointerCapture(pointer.pointerId)
+        timelineNodeDragRef.current = {
+            pointerId:pointer.pointerId,
+            startClientX:pointer.clientX,
+            baseline:{ events, objects:objs },
+            selection:nextSelection,
+            target:node,
+            delta:0,
+            moved:false,
+            captureElement:pointer.currentTarget,
+        }
+    }
+
+    const timelineNodeKeyDown = (key:ReactKeyboardEvent<HTMLDivElement>, node:TimelineNodeRef) => {
+        if (playing || (key.code !== 'Enter' && key.code !== 'Space')) return
+        key.preventDefault()
+        key.stopPropagation()
+        const mode = key.metaKey || key.ctrlKey ? 'toggle' : key.shiftKey ? 'range' : 'replace'
+        applyTimelineSelection(selectTimelineNode(timelineSelection, node, mode))
+    }
+
+    const timelineNodePointerMove = useEffectEvent((pointer:PointerEvent) => {
+        const drag = timelineNodeDragRef.current
+        if (!drag || pointer.pointerId !== drag.pointerId) return
+        const movement = pointer.clientX - drag.startClientX
+        if (!drag.moved && Math.abs(movement) < 3) return
+        pointer.preventDefault()
+        drag.moved = true
+        setTimelineNodesDragging(true)
+
+        const timelineElement = timelineElementRef.current
+        if (!timelineElement || endpoint <= 0) return
+        const contentWidth = timelineScrollMetrics(
+            timelineElement.getBoundingClientRect().width,
+            zoomRef.current,
+            rowScroll,
+        ).contentWidth
+        if (contentWidth <= 0) return
+
+        let requestedDelta = endpoint * movement / contentWidth
+        if (pointer.shiftKey) {
+            const targetStamp = timelineNodeStamp(drag.baseline, drag.target)
+            const gridStep = bpm > 0 && grid > 0 ? 60 / bpm / grid : 0
+            if (targetStamp !== undefined && gridStep > 0) {
+                requestedDelta = snapTimelineStamp(
+                    targetStamp + requestedDelta,
+                    gridStep,
+                    gridOffset,
+                    endpoint,
+                ) - targetStamp
+            }
+        }
+
+        const moved = moveTimelineNodes(drag.baseline, drag.selection, requestedDelta, endpoint)
+        drag.delta = moved.delta
+        setEvents(moved.events)
+        setObjs(moved.objects)
+    })
+
+    const finishTimelineNodeDrag = useEffectEvent((pointer:PointerEvent) => {
+        const drag = timelineNodeDragRef.current
+        if (!drag || pointer.pointerId !== drag.pointerId) return
+        if (drag.moved) {
+            const moved = moveTimelineNodes(drag.baseline, drag.selection, drag.delta, endpoint)
+            const sorted = sortTimelineNodes(moved, drag.selection)
+            setEvents(sorted.events)
+            setObjs(sorted.objects)
+            applyTimelineSelection(sorted.selection)
+        }
+        if (drag.captureElement.hasPointerCapture(drag.pointerId)) {
+            drag.captureElement.releasePointerCapture(drag.pointerId)
+        }
+        timelineNodeDragRef.current = null
+        setTimelineNodesDragging(false)
+    })
+
+    const cancelTimelineNodeDrag = useEffectEvent(() => {
+        const drag = timelineNodeDragRef.current
+        if (!drag) return
+        if (drag.moved) {
+            setEvents(drag.baseline.events)
+            setObjs(drag.baseline.objects)
+            applyTimelineSelection(drag.selection)
+        }
+        if (drag.captureElement.hasPointerCapture(drag.pointerId)) {
+            drag.captureElement.releasePointerCapture(drag.pointerId)
+        }
+        timelineNodeDragRef.current = null
+        setTimelineNodesDragging(false)
+    })
+
+    useEffect(() => {
+        document.addEventListener('pointermove', timelineNodePointerMove, { passive:false })
+        document.addEventListener('pointerup', finishTimelineNodeDrag)
+        document.addEventListener('pointercancel', cancelTimelineNodeDrag)
+        window.addEventListener('blur', cancelTimelineNodeDrag)
+        return () => {
+            document.removeEventListener('pointermove', timelineNodePointerMove)
+            document.removeEventListener('pointerup', finishTimelineNodeDrag)
+            document.removeEventListener('pointercancel', cancelTimelineNodeDrag)
+            window.removeEventListener('blur', cancelTimelineNodeDrag)
+        }
+    }, [])
+
+    const timelineMarqueePointerDown = (pointer:ReactPointerEvent<HTMLDivElement>) => {
+        if (playing || pointer.button !== 0) return
+        const target = pointer.target as HTMLElement
+        if (target.closest('[data-timeline-node]')) return
+        pointer.preventDefault()
+        const next:TimelineMarquee = {
+            pointerId:pointer.pointerId,
+            startClientX:pointer.clientX,
+            startClientY:pointer.clientY,
+            currentClientX:pointer.clientX,
+            currentClientY:pointer.clientY,
+            baseSelection:timelineSelection,
+            additive:pointer.metaKey || pointer.ctrlKey || pointer.shiftKey,
+            captureElement:pointer.currentTarget,
+        }
+        pointer.currentTarget.setPointerCapture(pointer.pointerId)
+        timelineMarqueeRef.current = next
+        setTimelineMarquee(next)
+    }
+
+    const timelineMarqueePointerMove = (pointer:ReactPointerEvent<HTMLDivElement>) => {
+        const marquee = timelineMarqueeRef.current
+        if (!marquee || pointer.pointerId !== marquee.pointerId) return
+        pointer.preventDefault()
+        const next = {
+            ...marquee,
+            currentClientX:pointer.clientX,
+            currentClientY:pointer.clientY,
+        }
+        timelineMarqueeRef.current = next
+        setTimelineMarquee(next)
+    }
+
+    const finishTimelineMarquee = (pointer:ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
+        const marquee = timelineMarqueeRef.current
+        if (!marquee || pointer.pointerId !== marquee.pointerId) return
+        const moved = Math.hypot(
+            pointer.clientX - marquee.startClientX,
+            pointer.clientY - marquee.startClientY,
+        ) >= 4
+        if (!cancelled && moved) {
+            const left = Math.min(marquee.startClientX, pointer.clientX)
+            const right = Math.max(marquee.startClientX, pointer.clientX)
+            const top = Math.min(marquee.startClientY, pointer.clientY)
+            const bottom = Math.max(marquee.startClientY, pointer.clientY)
+            const selected = Array.from(
+                eventsElementRef.current?.querySelectorAll<HTMLElement>('[data-timeline-node]') ?? [],
+            ).flatMap(element => {
+                const rect = element.getBoundingClientRect()
+                const centerX = rect.left + rect.width / 2
+                const centerY = rect.top + rect.height / 2
+                if (centerX < left || centerX > right || centerY < top || centerY > bottom) return []
+                const node = parseTimelineNodeKey(element.dataset.timelineNode ?? '')
+                return node ? [node] : []
+            })
+            applyTimelineSelection(marquee.additive
+                ? uniqueTimelineNodes([...marquee.baseSelection, ...selected])
+                : selected
+            )
+        } else if (!cancelled && !marquee.additive) {
+            clearTimelineSelection()
+        }
+        if (marquee.captureElement.hasPointerCapture(marquee.pointerId)) {
+            marquee.captureElement.releasePointerCapture(marquee.pointerId)
+        }
+        timelineMarqueeRef.current = null
+        setTimelineMarquee(null)
+    }
 
     const timelineMouseMove = useEffectEvent((e:MouseEvent) => {
         const layout = layoutRef.current
@@ -585,10 +855,14 @@ export default function Page(){
     }
 
     // 오브젝트 제거 함수
-    const remObj = (_i:number) => setObjs(current => current.filter((_, index) => index !== _i))
+    const remObj = (_i:number) => {
+        clearTimelineSelection()
+        setObjs(current => current.filter((_, index) => index !== _i))
+    }
     
     // 메인 이벤트 추가 함수
     const addEv = (_opt?:event) => {
+        clearTimelineSelection()
         const stamp = timelineRef.current
         const newEvent = _opt
             ? { ...structuredClone(_opt), stamp }
@@ -597,10 +871,14 @@ export default function Page(){
     }
     
     // 메인 이벤트 제거 함수
-    const remEv = (_idx:number) => setEvents(current => current.filter((_, index) => index !== _idx))
+    const remEv = (_idx:number) => {
+        clearTimelineSelection()
+        setEvents(current => current.filter((_, index) => index !== _idx))
+    }
     
     // 오브젝트 이벤트 추가 함수
     const addObjEv = (_i:number, _opt?:objEvent) => {
+        clearTimelineSelection()
         const stamp = timelineRef.current
         const newEvent:objEvent = _opt
             ? { ...structuredClone(_opt), stamp }
@@ -612,13 +890,17 @@ export default function Page(){
     }
 
     // 오브젝트 이벤트 제거 함수
-    const remObjEv = (_oi:number, _i:number) => setObjs(current => current.map((object, objectIndex) => objectIndex === _oi
-        ? { ...object, events:object.events.filter((_, eventIndex) => eventIndex !== _i) }
-        : object
-    ))
+    const remObjEv = (_oi:number, _i:number) => {
+        clearTimelineSelection()
+        setObjs(current => current.map((object, objectIndex) => objectIndex === _oi
+            ? { ...object, events:object.events.filter((_, eventIndex) => eventIndex !== _i) }
+            : object
+        ))
+    }
     
     // 차트 노트 추가 함수
     const addChartNote = (_i:number) => {
+        clearTimelineSelection()
         const note = {stamp:timelineRef.current, hit:0, judge:'none' as const}
         setObjs(current => current.map((object, index) => index === _i
             ? { ...object, notes:insertByStamp(object.notes ?? [], note) }
@@ -627,10 +909,13 @@ export default function Page(){
     }
 
     // 차트 노트 제거 함수
-    const remChartNote = (_oi:number, _i:number) => setObjs(current => current.map((object, objectIndex) => objectIndex === _oi
-        ? { ...object, notes:object.notes?.filter((_, noteIndex) => noteIndex !== _i) }
-        : object
-    ))
+    const remChartNote = (_oi:number, _i:number) => {
+        clearTimelineSelection()
+        setObjs(current => current.map((object, objectIndex) => objectIndex === _oi
+            ? { ...object, notes:object.notes?.filter((_, noteIndex) => noteIndex !== _i) }
+            : object
+        ))
+    }
 
     // 오브젝트 속성 설정 함수
     const setObjProperty = (_i:number, _type:keyof obj, _v:ObjectEditorValue) => {
@@ -660,7 +945,6 @@ export default function Page(){
 
     // 메인 이벤트 설정 함수
     const setEv = (_i:number, _t:eventProps, _v:EventEditorValue):void => {
-        let changed:event | undefined
         const nextEvents = events.map((currentEvent, index) => {
             if(index !== _i) return currentEvent
             const nextEvent:event = { ...currentEvent }
@@ -675,17 +959,23 @@ export default function Page(){
             }
             const numericValue = Number(_v)
             Object.assign(nextEvent, { [_t]:_t == 'value' || _t == 'speed' ? Number.isNaN(numericValue) ? _v : numericValue : _v })
-            changed = nextEvent
             return nextEvent
         })
-        if (_t === 'stamp') nextEvents.sort((first, second) => first.stamp - second.stamp)
-        setEvents(nextEvents)
-        if (_t === 'stamp' && changed) setFocusEvent([0, nextEvents.indexOf(changed)])
+        if (_t !== 'stamp') {
+            setEvents(nextEvents)
+            return
+        }
+        const selection = uniqueTimelineNodes([
+            ...timelineSelection,
+            { kind:'main-event', index:_i },
+        ])
+        const sorted = sortTimelineNodes({ events:nextEvents, objects:objs }, selection)
+        setEvents(sorted.events)
+        applyTimelineSelection(sorted.selection)
     }
 
     // 오브젝트 이벤트 설정 함수
     const setObjEv = (_oi:number, _i:number, _t:objEventProps, _v:ObjectEventEditorValue):void => {
-        let nextFocusIndex = _i
         const nextObjects = objs.map((object, objectIndex) => {
             if(objectIndex !== _oi) return object
             const objectEvents = object.events.map((currentEvent, eventIndex) => {
@@ -708,19 +998,24 @@ export default function Page(){
                 Object.assign(nextEvent, { [_t]:_v })
                 return nextEvent
             })
-            if (_t === 'stamp') {
-                const changed = objectEvents[_i]
-                objectEvents.sort((first, second) => first.stamp - second.stamp)
-                nextFocusIndex = objectEvents.indexOf(changed)
-            }
             return { ...object, events:objectEvents }
         })
-        setObjs(nextObjects)
-        if (_t === 'stamp') setFocusEvent([_oi + 1, nextFocusIndex])
+        if (_t !== 'stamp') {
+            setObjs(nextObjects)
+            return
+        }
+        const selection = uniqueTimelineNodes([
+            ...timelineSelection,
+            { kind:'object-event', objectIndex:_oi, index:_i },
+        ])
+        const sorted = sortTimelineNodes({ events, objects:nextObjects }, selection)
+        setObjs(sorted.objects)
+        applyTimelineSelection(sorted.selection)
     }
 
     // 오브젝트 인덱스 설정 함수
     const setObjIdx = (_i:number, _ri:number) => {
+        clearTimelineSelection()
         setObjs(current => {
             const selectedObject = current[_i]
             const remaining = current.filter((_, index) => index !== _i)
@@ -736,13 +1031,54 @@ export default function Page(){
         ))
     }
 
+    const moveSelectedTimelineNodes = (requestedDelta:number) => {
+        const moved = moveTimelineNodes(
+            { events, objects:objs },
+            timelineSelection,
+            requestedDelta,
+            endpoint,
+        )
+        const sorted = sortTimelineNodes(moved, timelineSelection)
+        setEvents(sorted.events)
+        setObjs(sorted.objects)
+        applyTimelineSelection(sorted.selection)
+    }
+
     const editorKeyDown = useEffectEvent((e:KeyboardEvent) => {
             if (playing) return
             const target = e.target
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
+            const commandModifier = e.ctrlKey || e.metaKey
+
+            if ((e.code === 'Delete' || e.code === 'Backspace') && timelineSelection.length > 0) {
+                e.preventDefault()
+                const deleted = deleteTimelineNodes({ events, objects:objs }, timelineSelection)
+                setEvents(deleted.events)
+                setObjs(deleted.objects)
+                clearTimelineSelection()
+                return
+            }
+            if (commandModifier && e.code === 'KeyA') {
+                e.preventDefault()
+                applyTimelineSelection(allTimelineNodes({ events, objects:objs }))
+                return
+            }
+            if (e.code === 'Escape' && timelineSelection.length > 0) {
+                e.preventDefault()
+                clearTimelineSelection()
+                return
+            }
+            if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && timelineSelection.length > 0) {
+                e.preventDefault()
+                const gridStep = bpm > 0 && grid > 0 ? 60 / bpm / grid : 0.01
+                const direction = e.code === 'ArrowLeft' ? -1 : 1
+                moveSelectedTimelineNodes(direction * gridStep * (e.shiftKey ? 4 : 1))
+                return
+            }
 
             // 옵젝 & 이벤트 삭제
-            if(e.code == 'Delete'){
+            if(e.code == 'Delete' || e.code == 'Backspace'){
+                e.preventDefault()
                 if(focusing == 0){
                     if(focusObj != 0){
                         remObj(focusObj-1)
@@ -778,7 +1114,7 @@ export default function Page(){
                     setFocusNote([focusNote[0], _idx])
                 }
             // 이벤트 복사, 자르기, 붙여넣기 코드
-            } else if((e.code == 'KeyC' || e.code == 'KeyX') && e.ctrlKey){ // 복사 & 자르기
+            } else if((e.code == 'KeyC' || e.code == 'KeyX') && commandModifier){ // 복사 & 자르기
                 if(focusEvent[0] != -1){
                     const cb:EventClipboard = focusEvent[0] == 0
                         ? { scope:'main', value:structuredClone(events[focusEvent[1]]) }
@@ -790,7 +1126,7 @@ export default function Page(){
                     }
                     setEvClipboard(cb)
                 }
-            } else if(e.code == 'KeyV' && e.ctrlKey){ // 붙여넣기
+            } else if(e.code == 'KeyV' && commandModifier){ // 붙여넣기
                 if(evClipboard){
                     if (focusObj == 0 && evClipboard.scope === 'main') addEv(evClipboard.value)
                     else if (focusObj > 0 && evClipboard.scope === 'object') addObjEv(focusObj-1, evClipboard.value)
@@ -1136,19 +1472,29 @@ export default function Page(){
                     <button onClick={() => addObj()}>+</button></div>
                 </div>
                 {colScroll <= 0 && <div className={focusObj == 0 ? 'selected' : ''}
-                onClick={() => {setFocusObj(0);setFocusing(0)}}>Main<button onClick={() => addEv()}>Add Event</button></div>}
+                onClick={() => {clearTimelineSelection();setFocusObj(0);setFocusing(0)}}>Main<button onClick={() => addEv()}>Add Event</button></div>}
                 {objs.map((v, i) => (
-                    colScroll <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
+                    colScroll <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {clearTimelineSelection();setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
                     {v.type == 'chart' && <button onClick={() => addChartNote(i)}>Add Note</button>}
                     <button onClick={() => addObjEv(i)}>Add Event</button></div>
                 ))}
             </div>
-            <div ref={timelineElementRef} style={{width:`${100-objLine}%`}} className="timeline">
+            <div
+                ref={timelineElementRef}
+                style={{width:`${100-objLine}%`}}
+                className="timeline"
+                data-timeline-selection-count={timelineSelection.length}
+            >
                 <div ref={controlsRef} className="controls">
                     {isTimelineMarkerVisible(playheadPixel, timelineViewportWidth, 12) && <div
                         style={{left:`${playheadPixel - 12}px`}}
                         className="timelineGrab"
                     />}
+                    <span className="timeline-selection-help">
+                        {timelineSelection.length > 0
+                            ? `${timelineSelection.length} selected · drag / arrows / delete`
+                            : 'Drag-select · Ctrl/Cmd-click adds · Shift-drag snaps'}
+                    </span>
                 </div>
                 <div className="overlay">
                     {gridLine.map((value, index) => {
@@ -1171,15 +1517,41 @@ export default function Page(){
                         style={{left:`${playheadPixel}px`}}
                     />}
                 </div>
-                <div className="events">
+                <div
+                    ref={eventsElementRef}
+                    className="events"
+                    onPointerDown={timelineMarqueePointerDown}
+                    onPointerMove={timelineMarqueePointerMove}
+                    onPointerUp={pointer => finishTimelineMarquee(pointer)}
+                    onPointerCancel={pointer => finishTimelineMarquee(pointer, true)}
+                >
+                    {timelineMarquee && <div
+                        className="timeline-marquee"
+                        style={{
+                            left:Math.min(timelineMarquee.startClientX, timelineMarquee.currentClientX),
+                            top:Math.min(timelineMarquee.startClientY, timelineMarquee.currentClientY),
+                            width:Math.abs(timelineMarquee.currentClientX - timelineMarquee.startClientX),
+                            height:Math.abs(timelineMarquee.currentClientY - timelineMarquee.startClientY),
+                        }}
+                    />}
                     {colScroll <= 0 && <div>
                         {events.map((eventValue, eventIndex) => {
                             const pixel = timelinePixel(eventValue.stamp)
+                            const node:TimelineNodeRef = { kind:'main-event', index:eventIndex }
+                            const key = timelineNodeKey(node)
                             return isTimelineMarkerVisible(pixel, timelineViewportWidth, 8) && <div
                                 key={eventIndex}
                                 style={{left:`${pixel - 8}px`}}
-                                className={`box ${focusEvent[0] == 0 && focusEvent[1] == eventIndex ? 'selected' : ''}`}
-                                onClick={() => {setFocusEvent([0, eventIndex]);setFocusing(1)}}
+                                className={`box ${selectedTimelineNodeKeys.has(key) ? 'selected' : ''} ${timelineNodesDragging && selectedTimelineNodeKeys.has(key) ? 'dragging' : ''}`}
+                                data-timeline-node={key}
+                                data-timeline-stamp={eventValue.stamp}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Main event at ${eventValue.stamp.toFixed(3)} seconds`}
+                                aria-pressed={selectedTimelineNodeKeys.has(key)}
+                                title={`Main event at ${eventValue.stamp.toFixed(3)}s`}
+                                onPointerDown={pointer => timelineNodePointerDown(pointer, node)}
+                                onKeyDown={keyboard => timelineNodeKeyDown(keyboard, node)}
                             />
                         })}
                     </div>}
@@ -1187,20 +1559,40 @@ export default function Page(){
                         colScroll <= objectIndex + 1 && <div key={objectIndex} style={{marginTop:`${(objectIndex + 1 - colScroll) * 25.5}px`}}>
                             {object.events.map((objectEvent, eventIndex) => {
                                 const pixel = timelinePixel(objectEvent.stamp)
+                                const node:TimelineNodeRef = { kind:'object-event', objectIndex, index:eventIndex }
+                                const key = timelineNodeKey(node)
                                 return isTimelineMarkerVisible(pixel, timelineViewportWidth, 8) && <div
                                     key={eventIndex}
                                     style={{left:`${pixel - 8}px`}}
-                                    className={`box ${focusEvent[0] == objectIndex + 1 && focusEvent[1] == eventIndex ? 'selected' : ''}`}
-                                    onClick={() => {setFocusEvent([objectIndex + 1, eventIndex]);setFocusing(1)}}
+                                    className={`box ${selectedTimelineNodeKeys.has(key) ? 'selected' : ''} ${timelineNodesDragging && selectedTimelineNodeKeys.has(key) ? 'dragging' : ''}`}
+                                    data-timeline-node={key}
+                                    data-timeline-stamp={objectEvent.stamp}
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Object ${objectIndex + 1} event at ${objectEvent.stamp.toFixed(3)} seconds`}
+                                    aria-pressed={selectedTimelineNodeKeys.has(key)}
+                                    title={`Object ${objectIndex + 1} event at ${objectEvent.stamp.toFixed(3)}s`}
+                                    onPointerDown={pointer => timelineNodePointerDown(pointer, node)}
+                                    onKeyDown={keyboard => timelineNodeKeyDown(keyboard, node)}
                                 />
                             })}
                             {object.type == 'chart' ? object.notes?.map((note, noteIndex) => {
                                 const pixel = timelinePixel(note.stamp)
+                                const node:TimelineNodeRef = { kind:'note', objectIndex, index:noteIndex }
+                                const key = timelineNodeKey(node)
                                 return isTimelineMarkerVisible(pixel, timelineViewportWidth, 8) && <div
                                     key={noteIndex}
                                     style={{left:`${pixel - 8}px`}}
-                                    className={`note ${focusNote[0] == objectIndex && focusNote[1] == noteIndex ? 'selected' : ''}`}
-                                    onClick={() => {setFocusNote([objectIndex, noteIndex]);setFocusing(2)}}
+                                    className={`note ${selectedTimelineNodeKeys.has(key) ? 'selected' : ''} ${timelineNodesDragging && selectedTimelineNodeKeys.has(key) ? 'dragging' : ''}`}
+                                    data-timeline-node={key}
+                                    data-timeline-stamp={note.stamp}
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Object ${objectIndex + 1} note at ${note.stamp.toFixed(3)} seconds`}
+                                    aria-pressed={selectedTimelineNodeKeys.has(key)}
+                                    title={`Object ${objectIndex + 1} note at ${note.stamp.toFixed(3)}s`}
+                                    onPointerDown={pointer => timelineNodePointerDown(pointer, node)}
+                                    onKeyDown={keyboard => timelineNodeKeyDown(keyboard, node)}
                                 />
                             }) : null}
                         </div>
@@ -1226,7 +1618,10 @@ export default function Page(){
             }}
             onPause={() => {
                 setPlaying(false)
-                setPlaytestStatus(current => current === 'running' ? 'paused' : current)
+                setPlaytestStatus(current => gaugeRef.current.failed
+                    ? 'failed'
+                    : current === 'running' ? 'paused' : current
+                )
             }}
             onWaiting={() => setPlaying(false)}
             onEnded={event => {
