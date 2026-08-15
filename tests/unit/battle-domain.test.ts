@@ -129,6 +129,26 @@ describe('battle judgement domain', () => {
         expect(result.pendingHits).toEqual([])
     })
 
+    it('never resolves more than one simultaneous note from one hit', () => {
+        const prepared = prepareNotes([chart([1]), chart([1]), chart([1])])
+        const hitFrame = evaluateJudgements(prepared, [1], 1, {})
+
+        expect(hitFrame.judgements).toEqual({
+            '0:0': { judge:'perfect', hit:1 },
+        })
+        expect(hitFrame.pendingHits).toEqual([])
+
+        const beforeMiss = evaluateJudgements(prepared, [], 1.09999, hitFrame.judgements)
+        expect(beforeMiss.judgements).toBe(hitFrame.judgements)
+
+        const afterMiss = evaluateJudgements(prepared, [], 1.1, beforeMiss.judgements)
+        expect(afterMiss.judgements).toEqual({
+            '0:0': { judge:'perfect', hit:1 },
+            '1:0': { judge:'miss', hit:1.1 },
+            '2:0': { judge:'miss', hit:1.1 },
+        })
+    })
+
     it('marks overdue notes missed and prunes stale unmatched hits', () => {
         const prepared = prepareNotes([chart([1])])
         const result = evaluateJudgements(prepared, [0], 1.5, {})

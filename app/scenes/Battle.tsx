@@ -22,7 +22,7 @@ import {
     advanceBattleFrame,
     createBattleGaugeState,
 } from '../logic/battleGauge'
-import { isGameplayKeyboardInput } from '../logic/battleInput'
+import { createGameplayKeyLatch } from '../logic/battleInput'
 import { BattleRenderer } from '../renderers/BattleRenderer'
 import { isEditableTarget } from '../logic/input'
 import type { GameScene } from '../logic/gameSession'
@@ -70,6 +70,7 @@ function BattleAttempt({
         fail:failAudio,
     } = useRuntimeMedia<HTMLAudioElement>(levelData.song, 'Battle audio failed to decode.')
     const pendingHitsRef = useRef<number[]>([])
+    const keyLatch = useMemo(() => createGameplayKeyLatch(), [])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
     const gaugeRef = useRef(createBattleGaugeState())
@@ -126,14 +127,29 @@ function BattleAttempt({
     useEffect(() => {
         const keydown = (event:KeyboardEvent) => {
             const audio = audioRef.current
-            if (!audio || isEditableTarget(event.target) || !isGameplayKeyboardInput(event) || !isAudioActivelyPlaying(audio)) return
+            if (!audio || isEditableTarget(event.target) || !isAudioActivelyPlaying(audio)) return
+            if (!keyLatch.press(event)) return
             event.preventDefault()
             const stamp = timelineStampFromAudio(audio, levelData.offset)
             pendingHitsRef.current = enqueuePendingHit(pendingHitsRef.current, stamp, stamp)
         }
+        const keyup = (event:KeyboardEvent) => keyLatch.release(event.code)
+        const clearKeys = () => keyLatch.clear()
+        const visibilitychange = () => {
+            if (document.visibilityState !== 'visible') clearKeys()
+        }
         document.addEventListener('keydown', keydown)
-        return () => document.removeEventListener('keydown', keydown)
-    }, [audioRef, levelData.offset])
+        document.addEventListener('keyup', keyup)
+        document.addEventListener('visibilitychange', visibilitychange)
+        window.addEventListener('blur', clearKeys)
+        return () => {
+            document.removeEventListener('keydown', keydown)
+            document.removeEventListener('keyup', keyup)
+            document.removeEventListener('visibilitychange', visibilitychange)
+            window.removeEventListener('blur', clearKeys)
+            clearKeys()
+        }
+    }, [audioRef, keyLatch, levelData.offset])
 
     useEffect(() => {
         if (audioRef.current) audioRef.current.volume = Math.min(1, Math.max(0, levelData.volume / 100 * masterVolume))

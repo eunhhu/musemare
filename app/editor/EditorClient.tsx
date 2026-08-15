@@ -17,7 +17,7 @@ import {
     createBattleGaugeState,
     type BattleGaugeState,
 } from '../logic/battleGauge'
-import { isGameplayKeyboardInput } from '../logic/battleInput'
+import { createGameplayKeyLatch } from '../logic/battleInput'
 import { clearEditorSeekEpoch, pauseAudioForLevelImport, seekAudioToLevelStart } from '../logic/editorAudio'
 import { isEditableTarget } from '../logic/input'
 import { audioTimeToTimeline, buildGridLines, clampTimeline } from "../logic/timing"
@@ -124,6 +124,7 @@ export default function Page(){
     const colWheelRemainderRef = useRef(0)
     const [timelineWidth, setTimelineWidth] = useState(0)
     const pendingHitsRef = useRef<number[]>([])
+    const keyLatch = useMemo(() => createGameplayKeyLatch(), [])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
     const gaugeRef = useRef(createBattleGaugeState())
@@ -826,17 +827,30 @@ export default function Page(){
         if(playing){
             const keydown = (e:KeyboardEvent) => {
                 const audio = audioRef.current
-                if(!audio || isEditableTarget(e.target) || !isGameplayKeyboardInput(e) || !isAudioActivelyPlaying(audio)) return
+                if(!audio || isEditableTarget(e.target) || !isAudioActivelyPlaying(audio)) return
+                if(!keyLatch.press(e)) return
                 e.preventDefault()
                 const stamp = timelineStampFromAudio(audio, offset)
                 pendingHitsRef.current = enqueuePendingHit(pendingHitsRef.current, stamp, stamp)
             }
+            const keyup = (e:KeyboardEvent) => keyLatch.release(e.code)
+            const clearKeys = () => keyLatch.clear()
+            const visibilitychange = () => {
+                if (document.visibilityState !== 'visible') clearKeys()
+            }
             document.addEventListener('keydown', keydown)
+            document.addEventListener('keyup', keyup)
+            document.addEventListener('visibilitychange', visibilitychange)
+            window.addEventListener('blur', clearKeys)
             return () => {
                 document.removeEventListener('keydown', keydown)
+                document.removeEventListener('keyup', keyup)
+                document.removeEventListener('visibilitychange', visibilitychange)
+                window.removeEventListener('blur', clearKeys)
+                clearKeys()
             }
         }
-    }, [audioRef, offset, playing])
+    }, [audioRef, keyLatch, offset, playing])
 
     const changeOffset = (nextOffset:number) => {
         pauseAudioForLevelImport(audioRef.current)
