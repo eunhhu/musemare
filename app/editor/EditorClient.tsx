@@ -69,6 +69,7 @@ import {
     type TimelineNodeRef,
 } from '../logic/editorTimelineNodes'
 import { wiggleDurationRate, wiggleDurationSeconds } from '../logic/wiggle'
+import { EditorIconButton, type EditorIconName } from './EditorIcon'
 import { TimelineLane, type TimelineLaneMarker } from './TimelineLane'
 import { useEditorLayout } from './useEditorLayout'
 
@@ -1491,6 +1492,13 @@ export default function Page(){
                 : playtestStatus === 'running'
                     ? 'Loading…'
                     : 'Playtest'
+    const transportIcon:EditorIconName = playing
+        ? 'pause'
+        : playtestStatus === 'failed' || playtestStatus === 'cleared'
+            ? 'replay'
+            : playtestStatus === 'running'
+                ? 'loading'
+                : 'play'
     const playtestLabel:Record<EditorPlaytestStatus, string> = {
         idle:'Edit preview',
         running:playing ? 'Playtest live' : 'Buffering',
@@ -1520,33 +1528,31 @@ export default function Page(){
         </div>}
         <div style={{height:`${100-underbarLine}%`}} className="workspace">
             <div style={{width:`${mainsetLine}%`}} className="mainset">
-                <div>
-                    <button onClick={() => reset()}>New</button>
-                    <button onClick={() => openLevel()}>Open</button>
-                    <button onClick={() => exportLevel()} disabled={audioImporting}>Export</button>
-                </div>
-                <div>
-                    <button onClick={() => v_setTimeline(0)}>Home</button>
-                    <button
-                        className="playlevel"
-                        onClick={() => void playLevel()}
-                        disabled={audioImporting || !playbackSong || (playtestStatus === 'running' && !playing)}
-                    >{transportLabel}</button>
-                    <button onClick={() => v_setTimeline(endpoint)}>End</button>
+                <div className="editor-project-toolbar" role="toolbar" aria-label="Project actions">
+                    <EditorIconButton icon="new-file" label="New" onClick={reset} />
+                    <EditorIconButton icon="open" label="Open" onClick={openLevel} />
+                    <EditorIconButton icon="export" label="Export" onClick={exportLevel} disabled={audioImporting} />
                 </div>
                 <hr />
                 {
                     focusObj == 0 ? <>
-                        <div><button onClick={() => changeChartOffset()}>Set Chart Offset</button><input type="text" name="" id="" value={chartOffset} onChange={e => setChartOffset(+e.target.value)} /></div>
+                        <div className="setting-action-row">
+                            <span>Chart Offset</span>
+                            <input type="text" value={chartOffset} onChange={event => setChartOffset(+event.target.value)} />
+                            <EditorIconButton icon="target" label="Set Chart Offset" onClick={changeChartOffset} />
+                        </div>
                         <div>Grid<input type="text" name="" id="" value={grid} onChange={e => setGrid(+e.target.value)} /></div>
                         <div>Grid Offset<input type="text" name="" id="" value={gridOffset} onChange={e => setGridOffset(+e.target.value)} /></div>
                         <div>BPM<input type="text" name="" id="" value={bpm} onChange={e => setBpm(+e.target.value)} /></div>
                         <div>Offsets<input type="text" name="" id="" value={offset} onChange={e => changeOffset(+e.target.value)} /></div>
                         <div className="song-source-picker">
                             <span>Song</span>
-                            <button type="button" onClick={openAudioFile} disabled={audioImporting}>
-                                {audioImporting ? 'Importing…' : 'Choose File'}
-                            </button>
+                            <EditorIconButton
+                                icon={audioImporting ? 'loading' : 'audio-file'}
+                                label={audioImporting ? 'Importing audio' : 'Choose File'}
+                                onClick={openAudioFile}
+                                disabled={audioImporting}
+                            />
                         </div>
                         <div className="song-source-url">
                             <span>URL</span>
@@ -1568,7 +1574,7 @@ export default function Page(){
                                 <span>{songSourceLabel}</span>
                                 <small>{songSourceDetail}</small>
                             </span>
-                            <button type="button" aria-label="Clear song" onClick={() => changeSong('')}>×</button>
+                            <EditorIconButton icon="close" label="Clear song" onClick={() => changeSong('')} />
                         </div>}
                         <div>BackgroundColor<input type="color" name="" id="" value={BackgroundColor} onChange={e => setBackgroundColor(e.target.value)}/></div>
                         <div>Volume<input type="text" name="" id="" value={volume} onChange={e => setVolume(+e.target.value)}/></div>
@@ -1628,6 +1634,18 @@ export default function Page(){
                     judgements={judgements}
                     surfaceLabel="battle-editor"
                 />
+                <div className="editor-transport" role="toolbar" aria-label="Playback controls">
+                    <EditorIconButton icon="skip-back" label="Home" onClick={() => v_setTimeline(0)} />
+                    <EditorIconButton
+                        icon={transportIcon}
+                        label={transportLabel}
+                        className="playlevel"
+                        data-transport-state={playing ? 'playing' : playtestStatus}
+                        onClick={() => void playLevel()}
+                        disabled={audioImporting || !playbackSong || (playtestStatus === 'running' && !playing)}
+                    />
+                    <EditorIconButton icon="skip-forward" label="End" onClick={() => v_setTimeline(endpoint)} />
+                </div>
                 <div
                     className={`editor-playtest-status ${playtestStatus}`}
                     data-editor-playtest-status={playtestStatus}
@@ -1652,8 +1670,18 @@ export default function Page(){
                     </h2>
                     <p>HP {gauge.health} · start {playtestStart.toFixed(3)}s</p>
                     <div>
-                        <button type="button" onClick={() => void startPlaytestAt(playtestStart)}>Restart</button>
-                        <button type="button" onClick={returnToEditing}>Return to Edit</button>
+                        <EditorIconButton
+                            icon="replay"
+                            label="Restart"
+                            className="result-action"
+                            onClick={() => void startPlaytestAt(playtestStart)}
+                        />
+                        <EditorIconButton
+                            icon="return-edit"
+                            label="Return to Edit"
+                            className="result-action"
+                            onClick={returnToEditing}
+                        />
                     </div>
                 </div>}
             </div>
@@ -1665,10 +1693,13 @@ export default function Page(){
                     </div>
                     <p>Properties below edit the active item only.</p>
                     <div className="selection-actions">
-                        <button type="button" onClick={alignSelectedTimelineNodes} title="Align every selected item to the active item's time (Ctrl/Cmd+Shift+L)">
-                            Align to {timelineSelectionSummary.active.toFixed(3)}s
-                        </button>
-                        <button type="button" className="danger" onClick={deleteSelectedTimelineNodes}>Delete</button>
+                        <EditorIconButton
+                            icon="align"
+                            label={`Align to ${timelineSelectionSummary.active.toFixed(3)}s`}
+                            onClick={alignSelectedTimelineNodes}
+                            title="Align every selected item to the active item's time (Ctrl/Cmd+Shift+L)"
+                        />
+                        <EditorIconButton icon="delete" label="Delete" className="danger" onClick={deleteSelectedTimelineNodes} />
                     </div>
                 </section>}
                 {focusEvent[0] == 0 ? <>
@@ -1784,14 +1815,24 @@ export default function Page(){
                         <option value="chart">Chart</option>
                         <option value="sprite">Sprite</option>
                     </select>
-                    <button onClick={() => addObj()}>+</button></div>
+                    <EditorIconButton icon="add-object" label="Add Object" onClick={addObj} />
+                    </div>
                 </div>
                 {colScroll <= 0 && <div className={focusObj == 0 ? 'selected' : ''}
-                onClick={() => {clearTimelineSelection();setFocusObj(0);setFocusing(0)}}>Main<button onClick={() => addEv()}>Add Event</button></div>}
+                onClick={() => {clearTimelineSelection();setFocusObj(0);setFocusing(0)}}>
+                    <span>Main</span>
+                    <span className="object-row-actions">
+                        <EditorIconButton icon="add-event" label="Add Event" onClick={() => addEv()} />
+                    </span>
+                </div>}
                 {objs.map((v, i) => (
-                    colScroll <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {clearTimelineSelection();setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
-                    {v.type == 'chart' && <button onClick={() => addChartNote(i)}>Add Note</button>}
-                    <button onClick={() => addObjEv(i)}>Add Event</button></div>
+                    colScroll <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {clearTimelineSelection();setFocusObj(i+1);setFocusing(0)}}>
+                        <span>{`Obj${i+1}`}</span>
+                        <span className="object-row-actions">
+                            {v.type == 'chart' && <EditorIconButton icon="add-note" label="Add Note" onClick={() => addChartNote(i)} />}
+                            <EditorIconButton icon="add-event" label="Add Event" onClick={() => addObjEv(i)} />
+                        </span>
+                    </div>
                 ))}
             </div>
             <div

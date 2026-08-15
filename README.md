@@ -71,8 +71,9 @@ Open `http://localhost:3000`. The editors are available at `/editor` and `/maped
 
 ### Battle editor
 
+- Project actions live in the icon toolbar at the top-left; Home, play/pause/replay, and End live in the centered preview transport. Every icon has a hover tooltip and accessible name.
 - `Choose File` accepts local MP3, WAV, OGG, M4A, AAC, FLAC, and WebM audio. Local files play through a temporary Blob URL; exported level JSON embeds the audio and preserves its filename so reopening the JSON does not depend on a machine-local path.
-- `Space` — start or resume playtest while stopped. During playtest it is a note input like every other key; use the visible Pause button to pause.
+- `Space` — start or resume playtest while stopped. During playtest it is a note input like every other key; use the pause icon in the preview transport to pause.
 - `Home` / `End` — seek to the beginning or endpoint.
 - Mouse wheel — pan the timeline; `Alt` + wheel zooms.
 - Drag or click the timeline ruler to seek; hold `Shift` while dragging to snap.

@@ -92,7 +92,12 @@ for (const route of [
 
         expect(response?.ok()).toBe(true)
         await expectRuntimeReady(page, route.runtime)
-        for (const label of route.labels) await expect(page.getByText(label, { exact:true })).toBeVisible()
+        for (const label of route.labels) {
+            const control = route.path === '/editor'
+                ? page.getByRole('button', { name:label, exact:true })
+                : page.getByText(label, { exact:true })
+            await expect(control).toBeVisible()
+        }
         if (route.canvas) await expectBackingDimensions(page.locator('canvas').first())
         await expectHealthy(page, failures)
     })
@@ -281,6 +286,15 @@ test('battle editor resizes its renderer and applies background changes', async 
     await expectRuntimeReady(page, 'battle-editor')
     const canvas = page.locator('canvas').first()
 
+    const projectToolbar = page.getByRole('toolbar', { name:'Project actions' })
+    const transport = page.getByRole('toolbar', { name:'Playback controls' })
+    await expect(projectToolbar.locator('button[data-editor-icon]')).toHaveCount(3)
+    await expect(transport).toBeVisible()
+    await expect(transport.getByRole('button', { name:'Home' })).toHaveAttribute('data-editor-icon', 'skip-back')
+    await expect(transport.getByRole('button', { name:'Playtest' })).toHaveAttribute('data-editor-icon', 'play')
+    await expect(transport.getByRole('button', { name:'End' })).toHaveAttribute('data-editor-icon', 'skip-forward')
+    await expect.poll(() => transport.evaluate(element => element.parentElement?.classList.contains('scene'))).toBe(true)
+
     await page.locator('.mainset input[type="color"]').first().fill('#123456')
     await expect(canvas).toHaveAttribute('data-pixi-background', '#123456')
     await page.setViewportSize({ width:1280, height:760 })
@@ -307,6 +321,18 @@ test('battle editor resizes its renderer and applies background changes', async 
             && thumb.x >= track.x - 0.5
             && thumb.x + thumb.width <= track.x + track.width + 0.5)
     }).toBe(true)
+
+    await page.setViewportSize({ width:800, height:720 })
+    await expectBackingDimensions(canvas)
+    await expect.poll(() => page.evaluate(() => {
+        const transportRect = document.querySelector('.editor-transport')?.getBoundingClientRect()
+        const statusRect = document.querySelector('.editor-playtest-status')?.getBoundingClientRect()
+        if (!transportRect || !statusRect) return false
+        return transportRect.right <= statusRect.left
+            || statusRect.right <= transportRect.left
+            || transportRect.bottom <= statusRect.top
+            || statusRect.bottom <= transportRect.top
+    })).toBe(true)
     await expectHealthy(page, failures)
 })
 
@@ -422,7 +448,7 @@ test('editor playtest judges live input without triggering editing shortcuts', a
     const status = page.locator('[data-editor-playtest-status]')
     const audio = page.locator('[data-testid="editor-audio"]')
     await expect(status).toHaveAttribute('data-editor-playtest-status', 'running')
-    await expect(page.getByRole('button', { name:'Pause' })).toBeVisible()
+    await expect(page.getByRole('button', { name:'Pause' })).toHaveAttribute('data-editor-icon', 'pause')
     await audio.evaluate(async element => {
         const target = element as HTMLAudioElement
         target.playbackRate = 0.1
@@ -452,6 +478,7 @@ test('editor playtest judges live input without triggering editing shortcuts', a
     await page.getByRole('button', { name:'Pause' }).click()
     await expect(status).toHaveAttribute('data-editor-playtest-status', 'paused')
     await expect(page.locator('.editor-battle-gauge')).toHaveAttribute('data-battle-health', '99')
+    await expect(page.getByRole('button', { name:'Resume' })).toHaveAttribute('data-editor-icon', 'play')
     await page.getByRole('button', { name:'Resume' }).click()
     await expect(status).toHaveAttribute('data-editor-playtest-status', 'running')
     await expect(page.locator('.editor-battle-gauge')).toHaveAttribute('data-battle-health', '99')
@@ -658,7 +685,7 @@ test('editor import pauses old audio and seeks after new source metadata', async
     })
 
     await input.setInputFiles({ name:'old-level.json', mimeType:'application/json', buffer:Buffer.from(level(0, 8)) })
-    await page.getByText('Playtest', { exact:true }).click()
+    await page.getByRole('button', { name:'Playtest', exact:true }).click()
     await expect.poll(() => page.locator('[data-testid="editor-audio"]').evaluate(audio => !(audio as HTMLAudioElement).paused)).toBe(true)
     await expect.poll(() => page.locator('[data-testid="editor-audio"]').evaluate(audio => (audio as HTMLAudioElement).currentTime)).toBeGreaterThan(0)
 
@@ -666,7 +693,7 @@ test('editor import pauses old audio and seeks after new source metadata', async
     const transport = page.locator('[data-testid="editor-audio"]')
     await expect.poll(() => transport.evaluate(audio => (audio as HTMLAudioElement).paused)).toBe(true)
     await expect.poll(() => transport.evaluate(audio => (audio as HTMLAudioElement).currentTime)).toBeCloseTo(1.5, 1)
-    await page.getByText('End', { exact:true }).click()
+    await page.getByRole('button', { name:'End', exact:true }).click()
     await expect.poll(() => transport.evaluate(audio => (audio as HTMLAudioElement).currentTime)).toBeCloseTo(5.5, 1)
     await expectHealthy(page, failures)
 })

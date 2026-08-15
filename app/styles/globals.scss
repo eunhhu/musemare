@@ -430,6 +430,30 @@ div.Battle, div.Explore{
       opacity: 0.65;
     }
   }
+  .editor-icon-button{
+    display: inline-grid;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    flex: 0 0 30px;
+    place-items: center;
+    padding: 0;
+    line-height: 0;
+  }
+  .editor-icon{
+    width: 17px;
+    height: 17px;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .editor-icon-spinner{
+    transform-origin: 12px 12px;
+    animation: editor-icon-spin 700ms linear infinite;
+  }
+  @keyframes editor-icon-spin{
+    to{transform: rotate(360deg);}
+  }
   .playlevel{
     border-color: rgba(103, 212, 255, 0.55);
     background: var(--editor-accent-soft);
@@ -488,9 +512,37 @@ div.Battle, div.Explore{
     }
     .mainset{
       border-right: 1px solid var(--editor-line);
+      .editor-project-toolbar{
+        position: sticky;
+        z-index: 4;
+        top: -8px;
+        justify-content: flex-start;
+        min-height: 42px;
+        margin: -8px -8px 3px;
+        padding: 8px;
+        border-bottom: 1px solid var(--editor-line);
+        background: rgba(13, 18, 26, 0.96);
+        backdrop-filter: blur(10px);
+        .editor-icon-button{
+          width: 32px;
+          min-width: 32px;
+          height: 32px;
+          min-height: 32px;
+          flex: 0 0 32px;
+        }
+      }
+      .setting-action-row{
+        > input{
+          width: 72px;
+          margin-left: auto;
+        }
+        .editor-icon-button{
+          flex: 0 0 30px;
+        }
+      }
       .song-source-picker{
-        button{
-          flex: 0 1 112px;
+        .editor-icon-button{
+          flex: 0 0 30px;
         }
       }
       .song-source-status{
@@ -566,10 +618,10 @@ div.Battle, div.Explore{
           font-size: 10px;
         }
         .selection-actions{
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
+          display: flex;
+          justify-content: flex-end;
           gap: 5px;
-          button{min-width: 0;padding-inline: 7px;}
+          .editor-icon-button{padding: 0;}
           .danger{border-color: rgba(255, 104, 127, 0.45);color: #ff9bab;}
         }
       }
@@ -587,6 +639,48 @@ div.Battle, div.Explore{
         width: 100%;
         height: 100%;
         background-color: #05070a;
+      }
+      .editor-transport{
+        position: absolute;
+        z-index: 8;
+        top: 10px;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        transform: translateX(-50%);
+        padding: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.13);
+        border-radius: 9px;
+        background: rgba(8, 12, 18, 0.86);
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(10px);
+        .editor-icon-button{
+          width: 32px;
+          min-width: 32px;
+          height: 32px;
+          min-height: 32px;
+          flex-basis: 32px;
+          border-color: transparent;
+          background: transparent;
+          color: var(--editor-muted);
+          &:hover:not(:disabled){
+            border-color: var(--editor-line-strong);
+            color: var(--editor-text);
+          }
+        }
+        .playlevel{
+          width: 38px;
+          min-width: 38px;
+          height: 38px;
+          min-height: 38px;
+          flex-basis: 38px;
+          border-color: rgba(103, 212, 255, 0.48);
+          border-radius: 8px;
+          background: var(--editor-accent-soft);
+          color: #c9f3ff;
+          .editor-icon{width: 19px;height: 19px;}
+        }
       }
     }
   }
@@ -652,6 +746,19 @@ div.Battle, div.Explore{
           border-radius: 0;
           background: transparent;
           color: inherit;
+        }
+        .object-row-actions{
+          display: flex;
+          align-self: stretch;
+          margin-left: auto;
+          .editor-icon-button{
+            width: 30px;
+            min-width: 30px;
+            height: 29px;
+            min-height: 29px;
+            flex: 0 0 30px;
+            padding: 0;
+          }
         }
         &.selected{
           background: var(--editor-accent-soft);
@@ -966,7 +1073,7 @@ div.Battle, div.Explore{
     }
   }
   .editor-battle-gauge{
-    top: 50px;
+    top: 70px;
     width: min(420px, calc(100% - 32px));
     font-family: inherit;
     .battle-gauge-label{
@@ -1029,9 +1136,22 @@ div.Battle, div.Explore{
       display: flex;
       gap: 8px;
       margin-top: 6px;
+      .result-action{
+        width: 42px;
+        min-width: 42px;
+        height: 42px;
+        min-height: 42px;
+        .editor-icon{width: 20px;height: 20px;}
+      }
     }
     &.cleared h2{
       color: var(--editor-positive);
+    }
+  }
+  @media (max-width: 900px){
+    .workspace .scene{
+      .editor-playtest-status{top: 66px;}
+      .editor-battle-gauge{top: 104px;}
     }
   }
 }
