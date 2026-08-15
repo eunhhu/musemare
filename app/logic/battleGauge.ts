@@ -1,5 +1,5 @@
 import type { judge } from '../data/types'
-import type { JudgementState, NoteId, PreparedNote } from './battleDomain'
+import { evaluateJudgements, type JudgementState, type NoteId, type PreparedNote } from './battleDomain'
 
 export type ScoredJudgement = Exclude<judge, 'none'>
 
@@ -70,4 +70,21 @@ export function applyBattleGaugeEvents(
     }
 
     return health === state.health ? state : { health, failed:false }
+}
+
+export function advanceBattleFrame(
+    notes:PreparedNote[],
+    hits:number[],
+    timeline:number,
+    judgements:JudgementState,
+    gauge:BattleGaugeState,
+) {
+    const evaluated = evaluateJudgements(notes, hits, timeline, judgements)
+    return {
+        ...evaluated,
+        gauge:applyBattleGaugeEvents(
+            gauge,
+            collectNewGaugeEvents(notes, judgements, evaluated.judgements),
+        ),
+    }
 }

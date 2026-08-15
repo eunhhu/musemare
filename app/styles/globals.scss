@@ -92,7 +92,7 @@ body {
   // 디버깅용도 : 주석처리로 보더박스 표시
   // border: 1px solid red;
   box-sizing: border-box;
-  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 // 풀스크린
@@ -362,30 +362,236 @@ div.Battle, div.Explore{
 }
 
 .Editor{
-  color: white;
-  user-select: none;
+  --editor-bg: #090c12;
+  --editor-panel: #111620;
+  --editor-panel-raised: #171e2a;
+  --editor-panel-hover: #1d2634;
+  --editor-line: #293446;
+  --editor-line-strong: #3b4a61;
+  --editor-text: #e8eef7;
+  --editor-muted: #8c9aaf;
+  --editor-accent: #67d4ff;
+  --editor-accent-soft: rgba(103, 212, 255, 0.16);
+  --editor-positive: #72e5a3;
+  --editor-warning: #f2c66d;
+  --editor-danger: #ff687f;
   width: 100vw;
   height: 100vh;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 55% 15%, rgba(80, 112, 170, 0.12), transparent 38%),
+    var(--editor-bg);
+  color: var(--editor-text);
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  user-select: none;
+  *{
+    font-family: inherit;
+  }
+  button,
+  input,
+  select{
+    min-height: 26px;
+    border: 1px solid var(--editor-line);
+    border-radius: 5px;
+    outline: 0;
+    background: var(--editor-panel-raised);
+    color: var(--editor-text);
+    font-size: 12px;
+  }
+  input,
+  select{
+    padding: 3px 7px;
+  }
+  input:focus-visible,
+  select:focus-visible,
+  button:focus-visible{
+    border-color: var(--editor-accent);
+    box-shadow: 0 0 0 2px var(--editor-accent-soft);
+  }
+  button{
+    padding: 4px 9px;
+    background: #1a2230;
+    font-weight: 650;
+    cursor: pointer;
+    transition: border-color 100ms ease, background-color 100ms ease, color 100ms ease;
+    &:hover:not(:disabled){
+      border-color: var(--editor-line-strong);
+      background: var(--editor-panel-hover);
+    }
+    &:disabled{
+      color: #647086;
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+  }
+  .playlevel{
+    border-color: rgba(103, 212, 255, 0.55);
+    background: var(--editor-accent-soft);
+    color: #c9f3ff;
+  }
+  .workspace{
+    height: 70%;
+    display: flex;
+    flex-direction: row;
+    min-height: 0;
+    border-bottom: 1px solid var(--editor-line);
+    .mainset,
+    .eventset{
+      width: 20%;
+      height: 100%;
+      flex: 0 0 auto;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 8px;
+      background: rgba(17, 22, 32, 0.96);
+      scrollbar-color: var(--editor-line-strong) transparent;
+      > div{
+        min-height: 32px;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 3px 2px;
+        color: var(--editor-muted);
+        input,
+        select{
+          width: min(112px, 52%);
+          min-width: 0;
+        }
+        input[type="checkbox"]{
+          width: 18px;
+          min-height: 18px;
+          accent-color: var(--editor-accent);
+        }
+        input[type="color"]{
+          height: 26px;
+          padding: 2px;
+        }
+        button{
+          width: auto;
+          flex: 1;
+        }
+      }
+      hr{
+        height: 1px;
+        margin: 8px 2px;
+        border: 0;
+        background: var(--editor-line);
+      }
+    }
+    .mainset{
+      border-right: 1px solid var(--editor-line);
+    }
+    .eventset{
+      border-left: 1px solid var(--editor-line);
+    }
+    .scene{
+      position: relative;
+      width: 80%;
+      height: 100%;
+      min-width: 0;
+      overflow: hidden;
+      background: #05070a;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+      canvas{
+        display: block;
+        width: 100%;
+        height: 100%;
+        background-color: #05070a;
+      }
+    }
+  }
   .underbar{
     height: 30%;
     display: flex;
     flex-direction: row;
-    justify-content: space-between;
+    min-height: 0;
+    background: var(--editor-panel);
+    .objs{
+      width: 20%;
+      height: 100%;
+      flex: 0 0 auto;
+      overflow: hidden;
+      border-right: 1px solid var(--editor-line);
+      background: var(--editor-panel);
+      .description{
+        min-height: 25px;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        padding-left: 8px;
+        border-bottom: 1px solid var(--editor-line);
+        background: #0d121a;
+        color: var(--editor-muted);
+        font-variant-numeric: tabular-nums;
+        div.right{
+          display: flex;
+          height: 24px;
+          select,
+          button{
+            min-height: 24px;
+            border-width: 0 0 0 1px;
+            border-radius: 0;
+          }
+          select{
+            width: 72px;
+            background: transparent;
+          }
+          button{
+            width: 30px;
+            padding: 0;
+            color: var(--editor-accent);
+          }
+        }
+      }
+      > div:not(.description){
+        height: 26px;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        padding-left: 8px;
+        border-bottom: 1px solid rgba(41, 52, 70, 0.72);
+        background: rgba(13, 18, 26, 0.62);
+        color: var(--editor-muted);
+        button{
+          align-self: stretch;
+          min-height: 24px;
+          padding: 0 8px;
+          border-width: 0 0 0 1px;
+          border-radius: 0;
+          background: transparent;
+          color: inherit;
+        }
+        &.selected{
+          background: var(--editor-accent-soft);
+          color: var(--editor-text);
+          box-shadow: inset 2px 0 var(--editor-accent);
+        }
+      }
+    }
     .timeline{
       position: relative;
-      min-width: 0;
       width: 80%;
       height: 100%;
+      min-width: 0;
       overflow: hidden;
-      background-color: #444444;
+      background: #0d121a;
       .controls{
         position: relative;
         height: 24px;
         overflow: hidden;
-        background-color: #2d2d2d;
+        border-bottom: 1px solid var(--editor-line);
+        background: #0a0f16;
+        cursor: col-resize;
         .timelineGrab{
           position: absolute;
           top: 0;
@@ -393,7 +599,8 @@ div.Battle, div.Explore{
           height: 0;
           border-right: 12px solid transparent;
           border-left: 12px solid transparent;
-          border-top: 24px solid rgba($color: #ff0000, $alpha: 1.0);
+          border-top: 24px solid var(--editor-danger);
+          filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
         }
       }
       .overlay{
@@ -404,23 +611,22 @@ div.Battle, div.Explore{
         pointer-events: none;
         .bar{
           position: absolute;
-          height: 100%;
           width: 2px;
-          background-color: rgba($color: #ff0000, $alpha: 1.0);
+          height: 100%;
+          background: var(--editor-danger);
+          box-shadow: 0 0 8px rgba(255, 104, 127, 0.42);
         }
         .grid{
           position: absolute;
-          height: 100%;
           width: 1px;
-          background-color: rgba($color: #afafaf, $alpha: 1.0);
+          height: 100%;
+          background: rgba(91, 108, 134, 0.55);
           &.m{
-            background-color: rgba($color: #5f5f5f, $alpha: 1.0);
+            background: rgba(55, 68, 88, 0.52);
           }
-          &.start{
-            background-color: rgba($color: #ffff00, $alpha: 1.0);
-          }
+          &.start,
           &.end{
-            background-color: rgba($color: #ffff00, $alpha: 1.0);
+            background: var(--editor-warning);
           }
         }
       }
@@ -429,27 +635,32 @@ div.Battle, div.Explore{
         z-index: 2;
         height: calc(100% - 34px);
         overflow: hidden;
-        div{
+        > div{
           position: absolute;
           width: 100%;
           height: 26px;
-          background-color: rgba($color: #000000, $alpha: 0.2);
-          border: rgba($color: #ffffff, $alpha: 0.2) 1px solid;
-          div{
+          border-bottom: 1px solid rgba(41, 52, 70, 0.7);
+          background: rgba(10, 15, 22, 0.36);
+          > div{
+            position: absolute;
             width: 16px;
             height: 16px;
             margin-top: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
             &.box{
-              border-radius: 3px;
-              background-color: white;
+              border-radius: 4px;
+              background: #a8b6ff;
             }
             &.note{
-              border-radius: 0px;
-              transform: rotate(45deg);
-              background-color: lightgreen;
+              transform: rotate(45deg) scale(0.78);
+              border-radius: 2px;
+              background: var(--editor-positive);
             }
             &.selected{
-              background-color: rgba($color: skyblue, $alpha: 1.0);
+              border-color: #ffffff;
+              background: var(--editor-accent);
+              box-shadow: 0 0 0 2px rgba(103, 212, 255, 0.24);
             }
           }
         }
@@ -462,95 +673,133 @@ div.Battle, div.Explore{
         left: 0;
         height: 10px;
         overflow: hidden;
-        background-color: rgba($color: #202020, $alpha: 0.5);
+        border-top: 1px solid var(--editor-line);
+        background: #090d13;
         div{
           position: absolute;
-          top: 0;
-          border-radius: 100px;
-          background-color: rgba($color: #000000, $alpha: 0.5);
+          top: 2px;
           width: 100%;
-          height: 10px;
-        }
-      }
-    }
-    .objs{
-      width: 20%;
-      height: 100%;
-      overflow: hidden;
-      background-color: #222222;
-      .description{
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        background-color: #131313;  
-        div.right{
-          select{
-            background-color: transparent;
-            option{
-              background-color: black;
-            }
-          }
-          button{
-            cursor: pointer;
-            font-weight: bold;
-            padding: 0 10px;
-            &:hover{
-              background-color: rgba($color: #ffffff, $alpha: 0.1);
-            }
-          }
-        }
-      }
-      div:not(.description, .right){
-        background-color: rgba($color: #000000, $alpha: 0.2);
-        border: rgba($color: #ffffff, $alpha: 0.2) 1px solid;
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        button{
-          background-color: rgba($color: #000000, $alpha: 0.2);
-          cursor: pointer;
-          font-weight: bold;
-          padding: 0 10px;
+          height: 6px;
+          border-radius: 999px;
+          background: #42516a;
           &:hover{
-            background-color: rgba($color: #ffffff, $alpha: 0.1);
+            background: #536580;
           }
-        }
-        &.selected{
-          background-color: rgba($color: #606060, $alpha: 0.4);
         }
       }
     }
   }
-  .workspace{
-    height: 70%;
+  .editor-playtest-status{
+    position: absolute;
+    z-index: 7;
+    top: 12px;
+    right: 12px;
     display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    .mainset, .eventset{
-      width: 20%;
-      height: 100%;
-      background-color: #323232;
-      div{
-        margin: 10px;
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        input, select, button{
-          background-color: #222222;
-          border-radius: 5px;
-          width: 80px;
-        }
-      }
+    align-items: center;
+    gap: 7px;
+    padding: 6px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 999px;
+    background: rgba(8, 12, 18, 0.82);
+    color: var(--editor-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    backdrop-filter: blur(10px);
+    strong{
+      color: var(--editor-text);
+      font-size: inherit;
+      font-weight: 700;
+      text-transform: uppercase;
     }
-    .scene{
-      width: 80%;
-      height: 100%;
-      background-color: #000000;
-      canvas{
-        width: 100%;
-        height: 100%;
-        background-color: #000000;
-      }
+    .status-dot{
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--editor-muted);
+    }
+    &.running .status-dot{
+      background: var(--editor-positive);
+      box-shadow: 0 0 8px rgba(114, 229, 163, 0.7);
+    }
+    &.paused .status-dot{
+      background: var(--editor-warning);
+    }
+    &.failed .status-dot{
+      background: var(--editor-danger);
+    }
+    &.cleared .status-dot{
+      background: var(--editor-accent);
+    }
+  }
+  .editor-battle-gauge{
+    top: 50px;
+    width: min(420px, calc(100% - 32px));
+    font-family: inherit;
+    .battle-gauge-label{
+      font-size: 11px;
+    }
+    .battle-gauge-track{
+      height: 10px;
+      border-width: 1px;
+      border-color: rgba(255, 255, 255, 0.7);
+    }
+  }
+  .editor-preview-hint{
+    position: absolute;
+    z-index: 6;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 7px 10px;
+    border: 1px solid var(--editor-line);
+    border-radius: 6px;
+    background: rgba(8, 12, 18, 0.82);
+    color: var(--editor-muted);
+    pointer-events: none;
+    backdrop-filter: blur(10px);
+  }
+  .editor-playtest-result{
+    position: absolute;
+    z-index: 9;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(5, 7, 10, 0.82);
+    color: var(--editor-text);
+    text-align: center;
+    backdrop-filter: blur(8px);
+    > span{
+      color: var(--editor-muted);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: 0.18em;
+    }
+    h2,
+    p{
+      margin: 0;
+    }
+    h2{
+      color: var(--editor-danger);
+      font-size: clamp(28px, 5vw, 52px);
+      font-weight: 750;
+      letter-spacing: -0.04em;
+    }
+    p{
+      color: var(--editor-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    > div{
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    &.cleared h2{
+      color: var(--editor-positive);
     }
   }
 }
@@ -734,11 +983,15 @@ div.Battle, div.Explore{
   .battle-gauge-fill{
     height: 100%;
     border-radius: inherit;
-    background: linear-gradient(90deg, #ff3b30, #ffd60a 45%, #34c759);
+    background: linear-gradient(90deg, #2fcf8f, #65d6ff);
     transition: width 120ms ease-out;
   }
+  &.low .battle-gauge-fill{
+    background: #f2c14e;
+  }
+  &.critical .battle-gauge-fill,
   &.failed .battle-gauge-fill{
-    background: #ff3b30;
+    background: #ff5f73;
   }
 }
 

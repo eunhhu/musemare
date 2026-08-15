@@ -106,6 +106,18 @@ export function prepareNotes(objects: obj[]): PreparedNote[] {
     }).sort((left, right) => left.stamp - right.stamp)
 }
 
+export function createSkippedJudgementBaseline(notes:PreparedNote[], timeline:number):JudgementState {
+    const missWindow = getJudgementWindows().miss
+    return notes.reduce<JudgementState>((baseline, note) => {
+        if (normalizeTiming(timeline - note.stamp) < missWindow) return baseline
+        baseline[note.id] = {
+            judge:'miss',
+            hit:Number.NEGATIVE_INFINITY,
+        }
+        return baseline
+    }, {})
+}
+
 function judgeDelta(delta: number, windows: JudgementWindows): JudgementRecord['judge'] | undefined {
     if (delta <= windows.perfect) {
         return 'perfect'

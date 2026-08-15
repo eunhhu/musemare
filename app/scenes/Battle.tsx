@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGameSession } from '../components/GameSession'
+import { BattleGauge } from '../components/BattleGauge'
 import { useRuntimeRoute } from '../components/RuntimeStatus'
 import { gameConfig } from '../config/gameConfig'
 import { levels } from '../data/level'
@@ -12,18 +13,16 @@ import { useSceneFade } from '../hooks/useSceneFade'
 import { useWindowSize } from '../hooks/useWindowSize'
 import {
     enqueuePendingHit,
-    evaluateJudgements,
     isAudioActivelyPlaying,
     prepareNotes,
     timelineStampFromAudio,
     type JudgementState,
 } from '../logic/battleDomain'
 import {
-    applyBattleGaugeEvents,
-    collectNewGaugeEvents,
+    advanceBattleFrame,
     createBattleGaugeState,
-    type BattleGaugeState,
 } from '../logic/battleGauge'
+import { isGameplayKeyboardInput } from '../logic/battleInput'
 import { BattleRenderer } from '../renderers/BattleRenderer'
 import { isEditableTarget } from '../logic/input'
 import type { GameScene } from '../logic/gameSession'
@@ -34,8 +33,6 @@ import {
     type BattleProgressTarget,
 } from '../logic/progression'
 
-const playKeys = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'BracketLeft', 'BracketRight', 'Backslash', 'Equal', 'Minus', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Space', 'ControlLeft', 'AltLeft', 'ControlRight', 'ContextMenu', 'AltRight', 'Enter', 'Backspace', 'Backquote', 'Tab', 'ShiftLeft', 'ShiftRight', 'CapsLock', 'Numpad0', 'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4', 'Numpad5', 'Numpad6', 'Numpad7', 'Numpad8', 'Numpad9', 'NumpadDecimal', 'NumLock', 'NumpadEnter', 'NumpadSubtract', 'NumpadAdd', 'NumpadMultiply', 'NumpadDivide', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']
-
 function UnavailableBattle({ code, onBack }:{ code:LevelCode, onBack:() => void }) {
     const manifest = levelManifest[code]
     useRuntimeRoute('battle-unavailable')
@@ -44,29 +41,6 @@ function UnavailableBattle({ code, onBack }:{ code:LevelCode, onBack:() => void 
         <h1>{manifest.track.artist} — {manifest.track.title}</h1>
         <p>This level is unavailable because the matching recording is not present as a legally usable repository asset.</p>
         <button type="button" onClick={onBack}>Back to Selector</button>
-    </div>
-}
-
-function BattleGauge({ gauge }:{ gauge:BattleGaugeState }) {
-    return <div
-        className={`battle-gauge${gauge.failed ? ' failed' : ''}`}
-        data-battle-health={gauge.health}
-        data-battle-failed={gauge.failed}
-    >
-        <div className="battle-gauge-label">
-            <span>HP</span>
-            <strong>{gauge.health}</strong>
-        </div>
-        <div
-            className="battle-gauge-track"
-            role="progressbar"
-            aria-label="Battle health"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={gauge.health}
-        >
-            <div className="battle-gauge-fill" style={{ width:`${gauge.health}%` }} />
-        </div>
     </div>
 }
 
@@ -111,29 +85,25 @@ function BattleAttempt({
         if (!audio || gaugeRef.current.failed) return
 
         const currentTimeline = timelineStampFromAudio(audio, levelData.offset)
-        const result = evaluateJudgements(
+        const result = advanceBattleFrame(
             preparedNotes,
             pendingHitsRef.current,
             currentTimeline,
             judgementsRef.current,
+            gaugeRef.current,
         )
         pendingHitsRef.current = result.pendingHits
-        let nextGauge = gaugeRef.current
         if (result.judgements !== judgementsRef.current) {
-            nextGauge = applyBattleGaugeEvents(
-                gaugeRef.current,
-                collectNewGaugeEvents(preparedNotes, judgementsRef.current, result.judgements),
-            )
             judgementsRef.current = result.judgements
             setJudgements(result.judgements)
-            if (nextGauge !== gaugeRef.current) {
-                gaugeRef.current = nextGauge
-                setGauge(nextGauge)
-            }
+        }
+        if (result.gauge !== gaugeRef.current) {
+            gaugeRef.current = result.gauge
+            setGauge(result.gauge)
         }
         setTimeline(currentTimeline)
 
-        if (nextGauge.failed) {
+        if (result.gauge.failed) {
             audio.pause()
             setAudioPlaying(false)
             return
@@ -156,7 +126,8 @@ function BattleAttempt({
     useEffect(() => {
         const keydown = (event:KeyboardEvent) => {
             const audio = audioRef.current
-            if (!audio || event.repeat || isEditableTarget(event.target) || !playKeys.includes(event.code) || !isAudioActivelyPlaying(audio)) return
+            if (!audio || isEditableTarget(event.target) || !isGameplayKeyboardInput(event) || !isAudioActivelyPlaying(audio)) return
+            event.preventDefault()
             const stamp = timelineStampFromAudio(audio, levelData.offset)
             pendingHitsRef.current = enqueuePendingHit(pendingHitsRef.current, stamp, stamp)
         }

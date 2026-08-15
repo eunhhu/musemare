@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { JudgementState, PreparedNote } from '../../app/logic/battleDomain'
+import { createSkippedJudgementBaseline, type JudgementState, type PreparedNote } from '../../app/logic/battleDomain'
 import {
+    advanceBattleFrame,
     applyBattleGaugeEvents,
     battleGaugeDelta,
     collectNewGaugeEvents,
@@ -77,5 +78,18 @@ describe('battle health gauge', () => {
         expect(collectNewGaugeEvents(notes, previous, next)).toEqual([
             { noteId:'1:0', stamp:1, judgement:'bad' },
         ])
+    })
+
+    it('does not charge health for notes skipped before an editor playtest segment', () => {
+        const notes:PreparedNote[] = [
+            { id:'0:0', objectIndex:0, noteIndex:0, stamp:1 },
+            { id:'0:1', objectIndex:0, noteIndex:1, stamp:2 },
+        ]
+        const baseline = createSkippedJudgementBaseline(notes, 1.2)
+        const result = advanceBattleFrame(notes, [], 2.1, baseline, createBattleGaugeState())
+
+        expect(result.judgements['0:0']).toEqual({ judge:'miss', hit:Number.NEGATIVE_INFINITY })
+        expect(result.judgements['0:1'].judge).toBe('miss')
+        expect(result.gauge).toEqual({ health:90, failed:false })
     })
 })

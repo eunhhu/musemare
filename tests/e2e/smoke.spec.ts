@@ -81,7 +81,7 @@ async function expectBackingDimensions(canvas:Locator) {
 
 for (const route of [
     { path:'/', runtime:'main-menu', labels:['New Game', 'Continue', 'Settings', 'Credits'], canvas:false },
-    { path:'/editor', runtime:'battle-editor', labels:['New', 'Open', 'Export', 'Play'], canvas:true },
+    { path:'/editor', runtime:'battle-editor', labels:['New', 'Open', 'Export', 'Playtest'], canvas:true },
     { path:'/mapeditor', runtime:'map-editor', labels:['Open Map', 'Save Map', 'Create Sprite'], canvas:true },
 ] as const) {
     test(`${route.path} reaches explicit readiness without runtime failures`, async ({ page }) => {
@@ -308,6 +308,129 @@ test('battle editor resizes its renderer and applies background changes', async 
     await expectHealthy(page, failures)
 })
 
+test('editor playtest judges live input without triggering editing shortcuts', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.goto('/editor', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'battle-editor')
+    const level = {
+        bpm:120,
+        offset:0,
+        song:'/assets/song/icyxis_true_ending.mp3',
+        backgroundColor:'#000000',
+        volume:100,
+        endpoint:3,
+        events:[],
+        position:[0, 0],
+        rotate:0,
+        scale:1,
+        filters:{ blur:0, dot:0, motionBlur:0, bloom:0, godray:0, convolution:0, glitch:0, grayscale:0, noise:0, pixelate:0, rgbsplit:0 },
+        objs:[{
+            type:'chart', bpm:120, notes:[{ stamp:1, hit:0, judge:'none' }],
+            position:[50, 50], rotate:0, scale:[1, 1], opacity:1, anchor:[0, 0], events:[], visible:true,
+            ease:'linear', mcolor:'#ffffff', jcolor:'#0099ff', ncolor:'#ffffff', drawer:'fill', shape:'rect', line:3, nline:3,
+        }],
+    }
+    await page.locator('input[type="file"]').setInputFiles({
+        name:'playtest-level.json',
+        mimeType:'application/json',
+        buffer:Buffer.from(JSON.stringify(level)),
+    })
+    await page.locator('.objs > div').nth(2).click({ position:{ x:8, y:12 } })
+    const noteMarkers = page.locator('.timeline .note')
+    await expect(noteMarkers).toHaveCount(1)
+
+    await page.getByRole('button', { name:'Playtest' }).click()
+    const status = page.locator('[data-editor-playtest-status]')
+    const audio = page.locator('[data-testid="editor-audio"]')
+    await expect(status).toHaveAttribute('data-editor-playtest-status', 'running')
+    await expect(page.getByRole('button', { name:'Pause' })).toBeVisible()
+    await audio.evaluate(async element => {
+        const target = element as HTMLAudioElement
+        target.playbackRate = 0.1
+        target.currentTime = 1.075
+        await new Promise<void>(resolve => {
+            const ready = () => {
+                if (!target.seeking && !target.paused && target.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) resolve()
+                else requestAnimationFrame(ready)
+            }
+            ready()
+        })
+    })
+    await expect(page.getByRole('button', { name:'Pause' })).toBeVisible()
+    const accepted = await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', {
+        code:'KeyW',
+        bubbles:true,
+        cancelable:true,
+    })))
+
+    expect(accepted).toBe(false)
+    await expect(page.locator('.editor-battle-gauge')).toHaveAttribute('data-battle-health', '99')
+    await expect(noteMarkers).toHaveCount(1)
+    await page.locator('.objs > div').nth(1).click({ position:{ x:8, y:12 } })
+    await page.locator('.mainset input[type="color"]').first().fill('#123456')
+    await expect(page.locator('canvas').first()).toHaveAttribute('data-pixi-background', '#123456')
+    await expect(status).toHaveAttribute('data-editor-playtest-status', 'running')
+    await page.getByRole('button', { name:'Pause' }).click()
+    await expect(status).toHaveAttribute('data-editor-playtest-status', 'paused')
+    await expect(page.locator('.editor-battle-gauge')).toHaveAttribute('data-battle-health', '99')
+    await page.getByRole('button', { name:'Resume' }).click()
+    await expect(status).toHaveAttribute('data-editor-playtest-status', 'running')
+    await expect(page.locator('.editor-battle-gauge')).toHaveAttribute('data-battle-health', '99')
+    await expectHealthy(page, failures)
+})
+
+test('editor playtest exposes the same latched game-over and restart flow', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.goto('/editor', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'battle-editor')
+    const level = {
+        bpm:120,
+        offset:0,
+        song:'/assets/song/icyxis_true_ending.mp3',
+        backgroundColor:'#000000',
+        volume:100,
+        endpoint:3,
+        events:[],
+        position:[0, 0],
+        rotate:0,
+        scale:1,
+        filters:{ blur:0, dot:0, motionBlur:0, bloom:0, godray:0, convolution:0, glitch:0, grayscale:0, noise:0, pixelate:0, rgbsplit:0 },
+        objs:[{
+            type:'chart', bpm:120,
+            notes:Array.from({ length:10 }, (_, index) => ({ stamp:0.2 + index * 0.08, hit:0, judge:'none' })),
+            position:[50, 50], rotate:0, scale:[1, 1], opacity:1, anchor:[0, 0], events:[], visible:true,
+            ease:'linear', mcolor:'#ffffff', jcolor:'#0099ff', ncolor:'#ffffff', drawer:'fill', shape:'rect', line:3, nline:3,
+        }],
+    }
+    await page.locator('input[type="file"]').setInputFiles({
+        name:'failure-level.json',
+        mimeType:'application/json',
+        buffer:Buffer.from(JSON.stringify(level)),
+    })
+
+    await page.getByRole('button', { name:'Playtest' }).click()
+    const audio = page.locator('[data-testid="editor-audio"]')
+    await expect(page.getByRole('button', { name:'Pause' })).toBeVisible()
+    await audio.evaluate(element => {
+        const target = element as HTMLAudioElement
+        target.currentTime = 1.1
+    })
+
+    const gauge = page.locator('.editor-battle-gauge')
+    await expect(gauge).toHaveAttribute('data-battle-health', '0')
+    await expect(gauge).toHaveAttribute('data-battle-failed', 'true')
+    await expect(page.locator('[data-editor-playtest-status]')).toHaveAttribute('data-editor-playtest-status', 'failed')
+    await expect(page.getByRole('heading', { name:'Game Over' })).toBeVisible()
+    await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).paused)).toBe(true)
+
+    await page.getByRole('dialog').getByRole('button', { name:'Restart', exact:true }).click()
+    await expect(gauge).toHaveAttribute('data-battle-health', '100')
+    await expect(gauge).toHaveAttribute('data-battle-failed', 'false')
+    await expect(page.locator('[data-editor-playtest-status]')).toHaveAttribute('data-editor-playtest-status', 'running')
+    await expect(page.getByRole('heading', { name:'Game Over' })).toHaveCount(0)
+    await expectHealthy(page, failures)
+})
+
 for (const invalidImport of [
     { path:'/editor', runtime:'battle-editor', message:/Level import rejected/ },
     { path:'/mapeditor', runtime:'map-editor', message:/Map import rejected/ },
@@ -453,7 +576,7 @@ test('editor import pauses old audio and seeks after new source metadata', async
     })
 
     await input.setInputFiles({ name:'old-level.json', mimeType:'application/json', buffer:Buffer.from(level(0, 8)) })
-    await page.getByText('Play', { exact:true }).click()
+    await page.getByText('Playtest', { exact:true }).click()
     await expect.poll(() => page.locator('[data-testid="editor-audio"]').evaluate(audio => !(audio as HTMLAudioElement).paused)).toBe(true)
     await expect.poll(() => page.locator('[data-testid="editor-audio"]').evaluate(audio => (audio as HTMLAudioElement).currentTime)).toBeGreaterThan(0)
 

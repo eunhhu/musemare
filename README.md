@@ -37,7 +37,7 @@ The selector still exposes each map section so the unavailable entries and their
 - Every battle starts at 100 health. Health is capped at 100.
 - Judgements change health by `Miss -10`, `Bad -1`, `Good +1`, `Great +2`, and `Perfect +3`.
 - Reaching zero at any point immediately latches game over; later judgements cannot revive the attempt. A clear requires at least one health through the end of the level.
-- Any supported gameplay key can hit a note. Simultaneous notes on separate chart lines require the same number of simultaneous key presses.
+- Any non-repeating keyboard input can hit a note. Simultaneous notes on separate chart lines require the same number of simultaneous key presses.
 - The editor and runtime share absolute, BPM-independent windows: `Perfect ±33.34ms`, `Great ±50ms`, `Good ±66.67ms`, `Bad ±83.33ms`, and `Miss ±100ms`. An unhit note becomes `Miss` when the 100ms window closes.
 
 ## Level Availability
@@ -71,7 +71,7 @@ Open `http://localhost:3000`. The editors are available at `/editor` and `/maped
 
 ### Battle editor
 
-- `Space` — play or pause.
+- `Space` — start or resume playtest while stopped. During playtest it is a note input like every other key; use the visible Pause button to pause.
 - `Home` / `End` — seek to the beginning or endpoint.
 - Mouse wheel — pan the timeline; `Alt` + wheel zooms.
 - Drag or click the timeline ruler to seek; hold `Shift` while dragging to snap.
@@ -80,7 +80,9 @@ Open `http://localhost:3000`. The editors are available at `/editor` and `/maped
 - `Delete` — remove the focused object, event, or note.
 - `Ctrl+C`, `Ctrl+X`, `Ctrl+V` — copy, cut, and paste events.
 
-Every discontinuous seek starts a new input/judgement epoch. Pending hits, judgement refs, and rendered judgements are cleared for Home, End, ruler seeks, imports, song/offset changes, and endpoint rewind.
+Every explicit seek starts a new input/judgement epoch. Pending hits and rendered judgements are cleared for Home, End, ruler seeks, imports, and song/offset changes; reaching the endpoint now keeps the clear result visible instead of silently rewinding.
+
+Playtest uses the same judgement and health pipeline as battle runtime. Starting from the middle silently skips older notes without charging health, pause/resume preserves the attempt, visual edits render during playback, note-topology edits start a fresh attempt, editing shortcuts are disabled while audio is playing, and failure or clear stays visible until restart or return to editing.
 
 ### Map editor
 

@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { BattleGauge } from '../components/BattleGauge'
 import { useRuntimeRoute } from '../components/RuntimeStatus'
 import { enableFilters, strengthFilters } from "../data/utils"
 import { obj, event, level, objEvent, eventProps, objEventProps, filter, filterType, eventValue } from "../data/types"
 import { BattleRenderer } from '../renderers/BattleRenderer'
 import {
+    createSkippedJudgementBaseline,
     enqueuePendingHit,
-    evaluateJudgements,
     isAudioActivelyPlaying,
     prepareNotes,
     timelineStampFromAudio,
     type JudgementState,
 } from "../logic/battleDomain"
+import {
+    advanceBattleFrame,
+    createBattleGaugeState,
+    type BattleGaugeState,
+} from '../logic/battleGauge'
+import { isGameplayKeyboardInput } from '../logic/battleInput'
 import { clearEditorSeekEpoch, pauseAudioForLevelImport, seekAudioToLevelStart } from '../logic/editorAudio'
 import { isEditableTarget } from '../logic/input'
 import { audioTimeToTimeline, buildGridLines, clampTimeline } from "../logic/timing"
@@ -31,6 +38,7 @@ type ObjectEditorValue = string | number | boolean | [0|1, number]
 type EventEditorValue = event[eventProps]
 type ObjectEventEditorValue = objEvent[objEventProps]
 type EventClipboard = { scope:'main', value:event } | { scope:'object', value:objEvent }
+type EditorPlaytestStatus = 'idle' | 'running' | 'paused' | 'failed' | 'cleared'
 
 function inputEventValue(value:eventValue | undefined):string | number {
     return typeof value === 'string' || typeof value === 'number' ? value : ''
@@ -43,9 +51,6 @@ function vectorEventValue(value:eventValue | undefined):[number, number] {
 function booleanEventValue(value:eventValue | undefined):boolean {
     return typeof value === 'boolean' ? value : Boolean(value)
 }
-
-// 플레이 가능한 키 등록
-const playKeys = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'BracketLeft', 'BracketRight', 'Backslash', 'Equal', 'Minus', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9']
 
 const defaultFilters:filter = {blur:0, dot:0, motionBlur:0, bloom:0, godray:0, convolution:0, glitch:0, grayscale:0, noise:0, pixelate:0, rgbsplit:0}
 
@@ -92,6 +97,9 @@ export default function Page(){
     const [gridOffset, setGridOffset] = useState<number>(0)
     const [chartOffset, setChartOffset] = useState<number>(0)
     const [playing, setPlaying] = useState<boolean>(false)
+    const [playtestStatus, setPlaytestStatus] = useState<EditorPlaytestStatus>('idle')
+    const [playtestStart, setPlaytestStart] = useState(0)
+    const [gauge, setGauge] = useState<BattleGaugeState>(createBattleGaugeState)
     const [timeline, setTimeline] = useState<number>(0)
     const gridLine = useMemo(() => buildGridLines({ bpm, divisions:grid, endpoint, offset:gridOffset }), [bpm, endpoint, grid, gridOffset])
     const [sel, setSel] = useState<'chart'|'sprite'>('chart')
@@ -118,6 +126,7 @@ export default function Page(){
     const pendingHitsRef = useRef<number[]>([])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
+    const gaugeRef = useRef(createBattleGaugeState())
     const sourceEpochRef = useRef(0)
     const clearSeekEpoch = useCallback(() => {
         clearEditorSeekEpoch(pendingHitsRef, judgementsRef, setJudgements)
@@ -132,6 +141,27 @@ export default function Page(){
         filters,
     }), [BackgroundColor, events, filters, objs, position, rotate, scale])
     const preparedNotes = useMemo(() => prepareNotes(objs), [objs])
+    const chartTopologyKey = useMemo(() => objs.map(object => object.type === 'chart'
+        ? `chart:${object.notes?.map(note => note.stamp).join(',') ?? ''}`
+        : object.type
+    ).join('|'), [objs])
+    const resetPlaytestState = useCallback(() => {
+        clearSeekEpoch()
+        const nextGauge = createBattleGaugeState()
+        gaugeRef.current = nextGauge
+        setGauge(nextGauge)
+        setPlaytestStatus('idle')
+    }, [clearSeekEpoch])
+    const beginPlaytestEpoch = useCallback((start:number) => {
+        const baseline = createSkippedJudgementBaseline(preparedNotes, start)
+        pendingHitsRef.current = []
+        judgementsRef.current = baseline
+        setJudgements(baseline)
+        const nextGauge = createBattleGaugeState()
+        gaugeRef.current = nextGauge
+        setGauge(nextGauge)
+        setPlaytestStart(start)
+    }, [preparedNotes])
     const timelineViewportWidth = timelineWidth || Math.max(1, condset[0] / 100 * (100 - objLine))
     const timelinePixel = (stamp:number) => timelinePixelAt(stamp, endpoint, timelineViewportWidth, zoom, rowScroll)
     useRuntimeRoute('battle-editor')
@@ -164,7 +194,7 @@ export default function Page(){
         setColScroll(0)
         colWheelRemainderRef.current = 0
         timelineRef.current = 0
-        clearSeekEpoch()
+        resetPlaytestState()
         setEvents([])
         setObjs([])
         setFilters(defaultFilters)
@@ -191,7 +221,7 @@ export default function Page(){
             const loadedLevel = parseLevelJson(await selectedFile.text())
             pauseAudioForLevelImport(audioRef.current)
             setPlaying(false)
-            clearSeekEpoch()
+            resetPlaytestState()
             setBpm(loadedLevel.bpm)
             setOffset(loadedLevel.offset)
             setSong(loadedLevel.song)
@@ -231,27 +261,66 @@ export default function Page(){
         URL.revokeObjectURL(_a.href)
     }
 
+    async function startPlaytestAt(start:number) {
+        const audio = audioRef.current
+        if (!audio || !song) return
+        const nextStart = clampTimeline(start >= endpoint ? 0 : start, endpoint)
+        beginPlaytestEpoch(nextStart)
+        timelineRef.current = nextStart
+        setTimeline(nextStart)
+        if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+            audio.currentTime = Math.max(0, nextStart + offset)
+        }
+        try {
+            await audio.play()
+            setPlaying(true)
+            setPlaytestStatus('running')
+        } catch (error) {
+            console.error('Unable to start editor playtest.', error)
+            setPlaying(false)
+            setPlaytestStatus('paused')
+        }
+    }
+
     async function playLevel (){
         const audio = audioRef.current
-        if (!audio) return
+        if (!audio || !song || (playtestStatus === 'running' && !playing)) return
 
-        if(playing){
+        if (playing) {
             audio.pause()
             setPlaying(false)
-        } else {
+            setPlaytestStatus('paused')
+            return
+        }
+
+        if (playtestStatus === 'paused') {
             try {
                 await audio.play()
                 setPlaying(true)
+                setPlaytestStatus('running')
             } catch (error) {
-                console.error('Unable to play the selected song.', error)
-                setPlaying(false)
+                console.error('Unable to resume editor playtest.', error)
             }
+            return
         }
+
+        const start = playtestStatus === 'failed' || playtestStatus === 'cleared'
+            ? playtestStart
+            : timelineRef.current
+        await startPlaytestAt(start)
+    }
+
+    const returnToEditing = () => {
+        audioRef.current?.pause()
+        setPlaying(false)
+        resetPlaytestState()
     }
 
     const v_setTimeline = (e:number) => {
         const nextTimeline = clampTimeline(e, endpoint)
-        clearSeekEpoch()
+        audioRef.current?.pause()
+        setPlaying(false)
+        resetPlaytestState()
         timelineRef.current = nextTimeline
         if (audioRef.current && song) {
             audioRef.current.currentTime = nextTimeline + offset
@@ -263,7 +332,7 @@ export default function Page(){
         const audio = audioRef.current
         if (!audio) return
         if (!song) return
-        clearSeekEpoch()
+        resetPlaytestState()
         const sourceEpoch = sourceEpochRef.current + 1
         sourceEpochRef.current = sourceEpoch
         const expectedSource = new URL(song, window.location.href).href
@@ -284,7 +353,7 @@ export default function Page(){
             audio.removeEventListener('loadedmetadata', seekToImportedOffset)
             if (sourceEpochRef.current === sourceEpoch) sourceEpochRef.current += 1
         }
-    }, [audioRef, clearSeekEpoch, offset, song])
+    }, [audioRef, offset, resetPlaytestState, song])
 
     useAnimationFrame(() => {
         const audio = audioRef.current
@@ -292,27 +361,45 @@ export default function Page(){
 
         const currentTimeline = clampTimeline(audioTimeToTimeline(audio.currentTime, offset), endpoint)
         timelineRef.current = currentTimeline
-        const result = evaluateJudgements(preparedNotes, pendingHitsRef.current, currentTimeline, judgementsRef.current)
+        const result = advanceBattleFrame(
+            preparedNotes,
+            pendingHitsRef.current,
+            currentTimeline,
+            judgementsRef.current,
+            gaugeRef.current,
+        )
         pendingHitsRef.current = result.pendingHits
         if (result.judgements !== judgementsRef.current) {
             judgementsRef.current = result.judgements
             setJudgements(result.judgements)
         }
+        if (result.gauge !== gaugeRef.current) {
+            gaugeRef.current = result.gauge
+            setGauge(result.gauge)
+        }
         setTimeline(currentTimeline)
 
-        if(currentTimeline >= endpoint){
-            clearSeekEpoch()
+        if (result.gauge.failed) {
             audio.pause()
-            audio.currentTime = offset
-            timelineRef.current = 0
-            setTimeline(0)
             setPlaying(false)
+            setPlaytestStatus('failed')
+            return
+        }
+
+        if(currentTimeline >= endpoint){
+            audio.pause()
+            timelineRef.current = endpoint
+            setTimeline(endpoint)
+            setPlaying(false)
+            setPlaytestStatus('cleared')
         }
     }, playing)
 
     useEffect(() => {
-        clearSeekEpoch()
-    }, [clearSeekEpoch, preparedNotes])
+        audioRef.current?.pause()
+        setPlaying(false)
+        resetPlaytestState()
+    }, [audioRef, chartTopologyKey, resetPlaytestState])
 
     const timelineMouseMove = useEffectEvent((e:MouseEvent) => {
         const layout = layoutRef.current
@@ -361,6 +448,7 @@ export default function Page(){
 
     const timelineKeyDown = useEffectEvent((e:KeyboardEvent) => {
         if (isEditableTarget(e.target)) return
+        if (playing) return
 
         const isNumlock = e.getModifierState('NumLock')
         if(e.code == 'Space'){
@@ -648,6 +736,7 @@ export default function Page(){
     }
 
     const editorKeyDown = useEffectEvent((e:KeyboardEvent) => {
+            if (playing) return
             const target = e.target
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return
 
@@ -737,7 +826,8 @@ export default function Page(){
         if(playing){
             const keydown = (e:KeyboardEvent) => {
                 const audio = audioRef.current
-                if(!audio || e.repeat || isEditableTarget(e.target) || !playKeys.includes(e.code) || !isAudioActivelyPlaying(audio)) return
+                if(!audio || isEditableTarget(e.target) || !isGameplayKeyboardInput(e) || !isAudioActivelyPlaying(audio)) return
+                e.preventDefault()
                 const stamp = timelineStampFromAudio(audio, offset)
                 pendingHitsRef.current = enqueuePendingHit(pendingHitsRef.current, stamp, stamp)
             }
@@ -747,16 +837,11 @@ export default function Page(){
             }
         }
     }, [audioRef, offset, playing])
-    useEffect(() => {
-        if(!playing) {
-            clearSeekEpoch()
-        }
-    }, [clearSeekEpoch, playing])
 
     const changeOffset = (nextOffset:number) => {
         pauseAudioForLevelImport(audioRef.current)
         setPlaying(false)
-        clearSeekEpoch()
+        resetPlaytestState()
         timelineRef.current = 0
         setTimeline(0)
         setOffset(nextOffset)
@@ -765,7 +850,7 @@ export default function Page(){
     const changeSong = (nextSong:string) => {
         pauseAudioForLevelImport(audioRef.current)
         setPlaying(false)
-        clearSeekEpoch()
+        resetPlaytestState()
         timelineRef.current = 0
         setTimeline(0)
         setSong(nextSong)
@@ -806,9 +891,25 @@ export default function Page(){
     const playheadPixel = timelinePixel(timeline)
     const gridDensityExponent = 5 - Math.round(zoom / 100)
     const gridDensityFactor = 2 ** (gridDensityExponent < 1 ? 1 : gridDensityExponent)
+    const transportLabel = playing
+        ? 'Pause'
+        : playtestStatus === 'paused'
+            ? 'Resume'
+            : playtestStatus === 'failed' || playtestStatus === 'cleared'
+                ? 'Replay'
+                : playtestStatus === 'running'
+                    ? 'Loading…'
+                    : 'Playtest'
+    const playtestLabel:Record<EditorPlaytestStatus, string> = {
+        idle:'Edit preview',
+        running:playing ? 'Playtest live' : 'Buffering',
+        paused:'Playtest paused',
+        failed:'Playtest failed',
+        cleared:'Playtest clear',
+    }
 
     // html 코드
-    return <div className="Editor">
+    return <div className={`Editor playtest-${playtestStatus}`}>
         {importError && <div className="import-error" role="alert">Level import rejected: {importError}</div>}
         <div style={{height:`${100-underbarLine}%`}} className="workspace">
             <div style={{width:`${mainsetLine}%`}} className="mainset">
@@ -819,7 +920,11 @@ export default function Page(){
                 </div>
                 <div>
                     <button onClick={() => v_setTimeline(0)}>Home</button>
-                    <button className="playlevel" onClick={() => playLevel()}>{playing ? 'Stop' : 'Play'}</button>
+                    <button
+                        className="playlevel"
+                        onClick={() => void playLevel()}
+                        disabled={!song || (playtestStatus === 'running' && !playing)}
+                    >{transportLabel}</button>
                     <button onClick={() => v_setTimeline(endpoint)}>End</button>
                 </div>
                 <hr />
@@ -890,6 +995,32 @@ export default function Page(){
                     playing={playing}
                     surfaceLabel="battle-editor"
                 />
+                <div
+                    className={`editor-playtest-status ${playtestStatus}`}
+                    data-editor-playtest-status={playtestStatus}
+                    aria-live="polite"
+                >
+                    <span className="status-dot" />
+                    <strong>{playtestLabel[playtestStatus]}</strong>
+                    <span>{timeline.toFixed(3)}s</span>
+                </div>
+                {playtestStatus !== 'idle' && <BattleGauge gauge={gauge} className="editor-battle-gauge" />}
+                {!song && <div className="editor-preview-hint">Set a song source to start playtest.</div>}
+                {(playtestStatus === 'failed' || playtestStatus === 'cleared') && <div
+                    className={`editor-playtest-result ${playtestStatus}`}
+                    role="dialog"
+                    aria-labelledby="editor-playtest-result-title"
+                >
+                    <span>PLAYTEST</span>
+                    <h2 id="editor-playtest-result-title">
+                        {playtestStatus === 'failed' ? 'Game Over' : 'Clear'}
+                    </h2>
+                    <p>HP {gauge.health} · start {playtestStart.toFixed(3)}s</p>
+                    <div>
+                        <button type="button" onClick={() => void startPlaytestAt(playtestStart)}>Restart</button>
+                        <button type="button" onClick={returnToEditing}>Return to Edit</button>
+                    </div>
+                </div>}
             </div>
             <div style={{width:`${eventsetLine}%`}} className="eventset">
                 {focusEvent[0] == 0 ? <>
@@ -1075,10 +1206,22 @@ export default function Page(){
             preload="auto"
             style={{display:'none'}}
             onCanPlayThrough={event => completeAudio(event.currentTarget)}
-            onPlaying={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
+            onPlaying={() => {
+                setPlaying(true)
+                setPlaytestStatus('running')
+            }}
+            onPause={() => {
+                setPlaying(false)
+                setPlaytestStatus(current => current === 'running' ? 'paused' : current)
+            }}
             onWaiting={() => setPlaying(false)}
-            onEnded={() => setPlaying(false)}
+            onEnded={event => {
+                const endTimeline = clampTimeline(audioTimeToTimeline(event.currentTarget.currentTime, offset), endpoint)
+                timelineRef.current = endTimeline
+                setTimeline(endTimeline)
+                setPlaying(false)
+                setPlaytestStatus(current => current === 'running' ? 'cleared' : current)
+            }}
             onError={event => failAudio(event.currentTarget)}
         ></audio>
     </div>

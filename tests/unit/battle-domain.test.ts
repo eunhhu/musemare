@@ -3,6 +3,7 @@ import { levels } from '../../app/data/level'
 import type { obj } from '../../app/data/types'
 import {
     MAX_PENDING_HITS,
+    createSkippedJudgementBaseline,
     enqueuePendingHit,
     evaluateJudgements,
     getJudgementWindows,
@@ -95,6 +96,15 @@ describe('battle judgement domain', () => {
         expect(evaluateJudgements(prepared, [], 1.1, {}).judgements['0:0']).toEqual({
             judge: 'miss',
             hit: 1.1,
+        })
+    })
+
+    it('creates a silent baseline for notes before an editor playtest start', () => {
+        const prepared = prepareNotes([chart([1, 1.15, 1.25])])
+
+        expect(createSkippedJudgementBaseline(prepared, 1.25)).toEqual({
+            '0:0':{ judge:'miss', hit:Number.NEGATIVE_INFINITY },
+            '0:1':{ judge:'miss', hit:Number.NEGATIVE_INFINITY },
         })
     })
 

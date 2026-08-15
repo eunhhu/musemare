@@ -164,9 +164,10 @@ function renderJudgement(
         text={judgement.judge.toUpperCase()}
         style={new PIXI.TextStyle({
             align: 'center',
-            fontFamily: 'Impact',
+            fontFamily: 'Arial',
             fontSize: 20,
-            fontWeight: '400',
+            fontWeight: '700',
+            letterSpacing: 1,
             fill,
             fontStyle: 'normal',
         })}
