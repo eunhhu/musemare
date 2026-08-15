@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+    buildTimelineRulerMarks,
     clampEditorPanel,
     consumeWheelRows,
+    formatTimelineTime,
     isTimelineMarkerVisible,
     timelinePixelAt,
     timelineScrollMetrics,
     timelineStampAtPixel,
+    zoomTimelineAtPixel,
 } from '../../app/logic/editorLayout'
 
 describe('editor layout bounds', () => {
@@ -58,5 +61,20 @@ describe('editor layout bounds', () => {
         expect(consumeWheelRows(0, 30)).toEqual({ rows:0, remainder:30 })
         expect(consumeWheelRows(30, 60)).toEqual({ rows:1, remainder:10 })
         expect(consumeWheelRows(10, -170)).toEqual({ rows:-2, remainder:0 })
+    })
+
+    it('keeps the timestamp under the pointer stable while zooming', () => {
+        const result = zoomTimelineAtPixel(800, 80, 100, 0, 400, 200)
+        expect(result).toMatchObject({ zoom:200, scroll:-400, anchorStamp:40 })
+        expect(timelineStampAtPixel(400, 80, 800, result.zoom, result.scroll)).toBeCloseTo(40)
+    })
+
+    it('builds readable ruler labels only for the visible range', () => {
+        expect(formatTimelineTime(65.2, 1)).toBe('01:05.2')
+        expect(formatTimelineTime(59.96, 1)).toBe('01:00.0')
+        const marks = buildTimelineRulerMarks(800, 80, 200, -400)
+        expect(marks[0].stamp).toBeGreaterThanOrEqual(20)
+        expect(marks.at(-1)!.stamp).toBeLessThanOrEqual(60)
+        expect(marks.length).toBeLessThan(20)
     })
 })

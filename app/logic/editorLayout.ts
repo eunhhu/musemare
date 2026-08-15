@@ -74,3 +74,72 @@ export function consumeWheelRows(remainder:number, delta:number, threshold = 80)
         : Math.floor(total / safeThreshold)
     return { rows, remainder:total - rows * safeThreshold }
 }
+
+export function zoomTimelineAtPixel(
+    viewportWidth:number,
+    endpoint:number,
+    currentZoom:number,
+    currentScroll:number,
+    pixel:number,
+    requestedZoom:number,
+) {
+    const zoom = clamp(Number.isFinite(requestedZoom) ? requestedZoom : currentZoom, 100, 800)
+    const anchorStamp = timelineStampAtPixel(pixel, endpoint, viewportWidth, currentZoom, currentScroll)
+    const metrics = timelineScrollMetrics(viewportWidth, zoom, 0)
+    const requestedScroll = endpoint > 0
+        ? pixel - metrics.contentWidth * anchorStamp / endpoint
+        : 0
+    return {
+        zoom,
+        scroll:timelineScrollMetrics(viewportWidth, zoom, requestedScroll).scroll,
+        anchorStamp,
+    }
+}
+
+export type TimelineRulerMark = {
+    stamp:number
+    label:string
+}
+
+function niceTimelineStep(minimumStep:number) {
+    if (!Number.isFinite(minimumStep) || minimumStep <= 0) return 1
+    const power = 10 ** Math.floor(Math.log10(minimumStep))
+    const normalized = minimumStep / power
+    const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10
+    return factor * power
+}
+
+export function formatTimelineTime(stamp:number, precision = 0) {
+    const safePrecision = clamp(Math.round(precision), 0, 3)
+    const bounded = Math.max(0, Number.isFinite(stamp) ? stamp : 0)
+    const multiplier = 10 ** safePrecision
+    const rounded = Math.round(bounded * multiplier) / multiplier
+    const minutes = Math.floor(rounded / 60)
+    const seconds = rounded - minutes * 60
+    const secondLabel = seconds.toFixed(safePrecision).padStart(safePrecision > 0 ? safePrecision + 3 : 2, '0')
+    return `${String(minutes).padStart(2, '0')}:${secondLabel}`
+}
+
+export function buildTimelineRulerMarks(
+    viewportWidth:number,
+    endpoint:number,
+    zoomPercent:number,
+    scroll:number,
+    minimumGap = 88,
+):TimelineRulerMark[] {
+    if (viewportWidth <= 0 || endpoint <= 0) return []
+    const { contentWidth } = timelineScrollMetrics(viewportWidth, zoomPercent, scroll)
+    if (contentWidth <= 0) return []
+    const pixelsPerSecond = contentWidth / endpoint
+    const step = niceTimelineStep(minimumGap / pixelsPerSecond)
+    const start = timelineStampAtPixel(0, endpoint, viewportWidth, zoomPercent, scroll)
+    const end = timelineStampAtPixel(viewportWidth, endpoint, viewportWidth, zoomPercent, scroll)
+    const first = Math.ceil((start - 1e-9) / step) * step
+    const fractional = step < 1
+    const marks:TimelineRulerMark[] = []
+    for (let stamp = first, count = 0; stamp <= end + 1e-9 && count < 200; stamp += step, count += 1) {
+        const rounded = Math.round(stamp * 1000) / 1000
+        marks.push({ stamp:rounded, label:formatTimelineTime(rounded, fractional ? 1 : 0) })
+    }
+    return marks
+}

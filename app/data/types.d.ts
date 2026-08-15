@@ -2,6 +2,7 @@ export type ease = 'linear'|'insine'|'outsine'|'sine'|'inquad'|'outquad'|'quad'|
 export type objEvType = 'position'|'rotate'|'scale'|'opacity'|'anchor'|'bpm'|'ease'|'visible'|'change'|'mcolor'|'jcolor'|'ncolor'|'drawer'|'shape'|'line'|'nline';
 export type mainEvType = 'bgcolor'|'filter'|'wiggle'|'position'|'rotate'|'scale';
 export type filterType = 'blur'|'dot'|'motionBlur'|'bloom'|'godray'|'convolution'|'glitch'|'grayscale'|'noise'|'pixelate'|'rgbsplit'
+export type wiggleAxis = 'both'|'x'|'y'
 export type judge = 'perfect'|'great'|'good'|'bad'|'miss'|'none'
 export type drawer = 'fill'|'stroke'
 export type eventValue = number|string|boolean|[number, number]
@@ -170,8 +171,12 @@ export interface event{
     smooth?:boolean;
     ease?:ease;
     speed?:number;
+    axis?:wiggleAxis;
+    seed?:number;
+    octaves?:number;
+    falloff?:number;
 }
-export type eventProps = 'stamp'|'type'|'value'|'duration'|'ease'|'speed'|'smooth'|'filter'
+export type eventProps = 'stamp'|'type'|'value'|'duration'|'ease'|'speed'|'smooth'|'filter'|'axis'|'seed'|'octaves'|'falloff'
 
 export interface objEvent{
     stamp:number;

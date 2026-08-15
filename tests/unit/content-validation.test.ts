@@ -29,6 +29,31 @@ describe('content import validation', () => {
         expect(parseLevelJson(JSON.stringify(level))).toEqual(level)
     })
 
+    it('validates advanced wiggle controls without rejecting legacy wiggles', () => {
+        const base = {
+            bpm:120, offset:0, song:'', backgroundColor:'#000000', volume:100,
+            position:[0, 0], rotate:0, scale:1, objs:[], filters, endpoint:90,
+        }
+        const advanced = {
+            ...base,
+            events:[{
+                stamp:1, type:'wiggle', value:50, duration:200, speed:8, smooth:true,
+                axis:'both', seed:12, octaves:4, falloff:0.45,
+            }],
+        }
+        const legacy = {
+            ...base,
+            events:[{ stamp:1, type:'wiggle', value:50, duration:200, speed:8, smooth:true }],
+        }
+
+        expect(parseLevelJson(JSON.stringify(advanced))).toEqual(advanced)
+        expect(parseLevelJson(JSON.stringify(legacy))).toEqual(legacy)
+        expect(() => parseLevelJson(JSON.stringify({
+            ...advanced,
+            events:[{ ...advanced.events[0], octaves:9 }],
+        }))).toThrow('level.events[0].octaves')
+    })
+
     it.each(['bad', 'great'] as const)('accepts the %s rhythm judgement in imported charts', judgement => {
         const level = structuredClone(levels.ending)
         const chart = level.objs.find(object => object.type === 'chart' && object.notes?.length)

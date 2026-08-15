@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isInRange } from '../data/utils'
 import { clamp, clampEditorPanel } from '../logic/editorLayout'
-import { isEditableTarget } from '../logic/input'
 
 const dragRange = 6
 
@@ -25,6 +24,12 @@ export function useEditorLayout() {
         scrollbarGrabOffset:0,
     })
 
+    const setEditorZoom = useCallback((value:number) => {
+        const next = clamp(value, 100, 800)
+        zoomRef.current = next
+        setZoom(next)
+    }, [])
+
     useEffect(() => {
         const layout = layoutRef.current
         const resizeCanvas = () => {
@@ -33,9 +38,6 @@ export function useEditorLayout() {
                 Math.max(1, innerWidth / 100 * (100 - layout.mainset - layout.eventset)),
                 Math.max(1, innerHeight / 100 * (100 - layout.underbar)),
             ])
-        }
-        const keydown = (event:KeyboardEvent) => {
-            if (event.altKey && !isEditableTarget(event.target)) event.preventDefault()
         }
         const mouseup = () => {
             layout.dragging = ''
@@ -76,40 +78,28 @@ export function useEditorLayout() {
             const overObjects = isInRange(event.clientX, dragRange, innerWidth / 100 * layout.objects) && event.clientY > innerHeight / 100 * (100 - layout.underbar)
             document.body.style.cursor = overHorizontal ? 'n-resize' : overMain || overEvents || overObjects ? 'e-resize' : 'unset'
         }
-        const wheel = (event:WheelEvent) => {
-            if (!event.altKey) return
-            event.preventDefault()
-            zoomRef.current -= zoomRef.current / 8 * (event.deltaY / 100)
-            zoomRef.current = clamp(zoomRef.current, 100, 800)
-            setZoom(zoomRef.current)
-        }
         const contextmenu = (event:Event) => event.preventDefault()
 
         window.addEventListener('resize', resizeCanvas)
-        document.addEventListener('wheel', wheel, { passive:false })
         document.addEventListener('contextmenu', contextmenu)
         document.addEventListener('mousemove', mousemove)
         document.addEventListener('mousedown', mousedown)
         document.addEventListener('mouseup', mouseup)
-        document.addEventListener('keydown', keydown)
         resizeCanvas()
 
         return () => {
             window.removeEventListener('resize', resizeCanvas)
-            document.removeEventListener('wheel', wheel)
             document.removeEventListener('contextmenu', contextmenu)
             document.removeEventListener('mousemove', mousemove)
             document.removeEventListener('mousedown', mousedown)
             document.removeEventListener('mouseup', mouseup)
-            document.removeEventListener('keydown', keydown)
             document.body.style.cursor = 'unset'
         }
     }, [])
 
     const resetZoom = useCallback(() => {
-        zoomRef.current = 100
-        setZoom(100)
-    }, [])
+        setEditorZoom(100)
+    }, [setEditorZoom])
 
     return {
         underbarLine,
@@ -120,6 +110,7 @@ export function useEditorLayout() {
         stageSize,
         zoom,
         zoomRef,
+        setEditorZoom,
         layoutRef,
         resetZoom,
     }

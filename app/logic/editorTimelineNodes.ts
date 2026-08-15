@@ -205,3 +205,33 @@ export function deleteTimelineNodes(
         })),
     }
 }
+
+export function alignTimelineNodes(
+    content:TimelineNodeContent,
+    selection:TimelineNodeRef[],
+    requestedStamp?:number,
+) {
+    const fallbackStamp = selection.at(-1) ? timelineNodeStamp(content, selection.at(-1)!) : undefined
+    const stamp = requestedStamp ?? fallbackStamp
+    if (stamp === undefined || !Number.isFinite(stamp) || selection.length < 2) {
+        return { ...content, selection }
+    }
+
+    const selected = new Set(selection.map(timelineNodeKey))
+    const events = content.events.map((currentEvent, index) => selected.has(`main:${index}`)
+        ? { ...currentEvent, stamp }
+        : currentEvent
+    )
+    const objects = content.objects.map((object, objectIndex) => ({
+        ...object,
+        events:object.events.map((currentEvent, index) => selected.has(`object-event:${objectIndex}:${index}`)
+            ? { ...currentEvent, stamp }
+            : currentEvent
+        ),
+        notes:object.notes?.map((note, index) => selected.has(`note:${objectIndex}:${index}`)
+            ? { ...note, stamp }
+            : note
+        ),
+    }))
+    return sortTimelineNodes({ events, objects }, selection)
+}

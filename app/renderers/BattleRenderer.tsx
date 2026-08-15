@@ -7,6 +7,7 @@ import type { battleRenderData, drawer, ease, eventValue, filterType, obj } from
 import { Easing, calcEventColor, calcEventValue, enableFilters, getPos, parseHex } from '../data/utils'
 import { resolveObjectBpmAt, type JudgementRecord, type JudgementState, type NoteId } from '../logic/battleDomain'
 import { BattleFilterRegistry } from '../logic/battleFilters'
+import { evaluateWiggle } from '../logic/wiggle'
 
 extend({
     Container: PIXI.Container,
@@ -181,6 +182,7 @@ function renderJudgement(
 }
 
 function applyEvents(base: battleRenderData, timeline: number) {
+    const activeWiggles = base.events.filter(event => event.type === 'wiggle' && timeline >= event.stamp)
     base.events.forEach(event => {
         if (timeline < event.stamp) {
             return
@@ -189,15 +191,7 @@ function applyEvents(base: battleRenderData, timeline: number) {
         if (event.type === 'bgcolor') {
             base.backgroundColor = calcEventColor(timeline, event.stamp, 60 / (event.duration as number), base.backgroundColor, String(event.value ?? base.backgroundColor), event.ease)
         } else if (event.type === 'wiggle') {
-            if (timeline >= event.stamp + 60 / (event.duration as number)) return
-            const elapsed = timeline - event.stamp
-            const speed = 1 / Number(event.speed)
-            const step = (elapsed % speed) * (1 / speed)
-            const phase = Math.round(elapsed / (speed / 10)) % 4
-            const direction = phase >= 2 ? -1 : 1
-            const offset = phase % 2 === 0 ? step : 1 - step
-            const smoothing = event.smooth ? 1 - elapsed / (60 / (event.duration as number)) : 1
-            base.position[1] += offset * direction * smoothing * (Number(event.value) / 10)
+            return
         } else if (event.type === 'rotate') {
             base.rotate = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.rotate, Number(event.value), event.ease)
         } else if (event.type === 'scale') {
@@ -214,6 +208,11 @@ function applyEvents(base: battleRenderData, timeline: number) {
                 base.filters[filter] = calcEventValue(timeline, event.stamp, 60 / (event.duration as number), base.filters[filter], Number(event.value) / 100, event.ease)
             }
         }
+    })
+    activeWiggles.forEach(event => {
+        const offset = evaluateWiggle(event, timeline)
+        base.position[0] += offset.x
+        base.position[1] += offset.y
     })
 
     base.objs.forEach(object => {

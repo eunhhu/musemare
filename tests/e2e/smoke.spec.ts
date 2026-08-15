@@ -308,6 +308,42 @@ test('battle editor resizes its renderer and applies background changes', async 
     await expectHealthy(page, failures)
 })
 
+test('editor fans out simultaneous events and supports grouped alignment', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.goto('/editor', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'battle-editor')
+
+    const addEvent = page.getByRole('button', { name:'Add Event', exact:true })
+    await addEvent.click()
+    await addEvent.click()
+
+    const stack = page.locator('[data-timeline-stack-count="2"]')
+    await expect(stack).toBeVisible()
+    await stack.click()
+    const markers = page.getByRole('button', { name:'Main background color event at 0.000 seconds' })
+    await expect(markers).toHaveCount(2)
+    await markers.first().click()
+    await expect(markers.first()).toHaveAttribute('aria-pressed', 'true')
+
+    await stack.click({ modifiers:['Shift'] })
+    const timeline = page.locator('.timeline')
+    await expect(timeline).toHaveAttribute('data-timeline-selection-count', '2')
+    await page.locator('.eventset input[type="number"]').first().fill('1')
+    await expect(page.getByRole('button', { name:'Align to 1.000s' })).toBeVisible()
+    await page.getByRole('button', { name:'Align to 1.000s' }).click()
+    const alignedStack = page.locator('[data-timeline-stack-count="2"]')
+    await expect(alignedStack).toBeVisible()
+    await alignedStack.click()
+    await page.getByRole('button', { name:'Main background color event at 1.000 seconds' }).first().click()
+    await expect(timeline).toHaveAttribute('data-timeline-selection-count', '1')
+
+    await page.locator('.eventset select').first().selectOption('wiggle')
+    await expect(page.getByText('Frequency (Hz)', { exact:true })).toBeVisible()
+    await expect(page.getByText('Complexity', { exact:true })).toBeVisible()
+    await expect(page.getByText('Smooth exit', { exact:true })).toBeVisible()
+    await expectHealthy(page, failures)
+})
+
 test('editor playtest judges live input without triggering editing shortcuts', async ({ page }) => {
     const failures = await observeRuntimeFailures(page)
     await page.goto('/editor', { waitUntil:'domcontentloaded' })

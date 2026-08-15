@@ -14,6 +14,7 @@ import type {
     objEvent,
     player,
     text,
+    wiggleAxis,
 } from '../data/types'
 
 type JsonRecord = Record<string, unknown>
@@ -34,6 +35,7 @@ const filterTypes = new Set<filterType>([
     'grayscale', 'noise', 'pixelate', 'rgbsplit',
 ])
 const judges = new Set<note['judge']>(['perfect', 'great', 'good', 'bad', 'miss', 'none'])
+const wiggleAxes = new Set<wiggleAxis>(['both', 'x', 'y'])
 
 export class ContentValidationError extends Error {
     constructor(path:string, expectation:string) {
@@ -70,6 +72,14 @@ function positive(value:unknown, path:string):number {
 function nonNegative(value:unknown, path:string):number {
     const result = finite(value, path)
     if (result < 0) throw new ContentValidationError(path, 'zero or greater')
+    return result
+}
+
+function range(value:unknown, path:string, minimum:number, maximum:number):number {
+    const result = finite(value, path)
+    if (result < minimum || result > maximum) {
+        throw new ContentValidationError(path, `between ${minimum} and ${maximum}`)
+    }
     return result
 }
 
@@ -136,7 +146,18 @@ function validateMainEvent(value:unknown, path:string):event {
     if (result.type === 'position') tuple(result.value, `${path}.value`)
     else if (result.type === 'bgcolor') color(result.value, `${path}.value`)
     else numericEventValue(result.value, `${path}.value`)
-    if (result.type === 'wiggle') positive(result.speed, `${path}.speed`)
+    if (result.type === 'wiggle') {
+        positive(result.speed, `${path}.speed`)
+        if (result.axis !== undefined && (typeof result.axis !== 'string' || !wiggleAxes.has(result.axis as wiggleAxis))) {
+            throw new ContentValidationError(`${path}.axis`, '"both", "x", or "y"')
+        }
+        if (result.seed !== undefined) finite(result.seed, `${path}.seed`)
+        if (result.octaves !== undefined) {
+            const octaves = range(result.octaves, `${path}.octaves`, 1, 8)
+            if (!Number.isInteger(octaves)) throw new ContentValidationError(`${path}.octaves`, 'an integer between 1 and 8')
+        }
+        if (result.falloff !== undefined) range(result.falloff, `${path}.falloff`, 0.05, 1)
+    }
     else if (result.speed !== undefined) positive(result.speed, `${path}.speed`)
     if (result.smooth !== undefined) boolean(result.smooth, `${path}.smooth`)
     optionalEase(result.ease, `${path}.ease`)

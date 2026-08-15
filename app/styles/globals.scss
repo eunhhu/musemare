@@ -491,6 +491,45 @@ div.Battle, div.Explore{
     }
     .eventset{
       border-left: 1px solid var(--editor-line);
+      .event-editor-help{
+        margin: 3px 2px 7px;
+        padding: 8px;
+        border: 1px solid rgba(103, 212, 255, 0.18);
+        border-radius: 6px;
+        background: rgba(103, 212, 255, 0.07);
+        color: #a9b8cc;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .timeline-selection-summary{
+        display: grid;
+        gap: 7px;
+        margin: 0 0 8px;
+        padding: 9px;
+        border: 1px solid rgba(103, 212, 255, 0.32);
+        border-radius: 7px;
+        background: linear-gradient(145deg, rgba(103, 212, 255, 0.13), rgba(103, 212, 255, 0.04));
+        > div:first-child{
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          strong{font-size: 12px;color: var(--editor-text);}
+          span{color: var(--editor-accent);font-variant-numeric: tabular-nums;}
+        }
+        p{
+          margin: 0;
+          color: var(--editor-muted);
+          font-size: 10px;
+        }
+        .selection-actions{
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 5px;
+          button{min-width: 0;padding-inline: 7px;}
+          .danger{border-color: rgba(255, 104, 127, 0.45);color: #ff9bab;}
+        }
+      }
     }
     .scene{
       position: relative;
@@ -522,7 +561,7 @@ div.Battle, div.Explore{
       border-right: 1px solid var(--editor-line);
       background: var(--editor-panel);
       .description{
-        min-height: 25px;
+        min-height: 32px;
         display: flex;
         flex-direction: row;
         align-items: center;
@@ -534,10 +573,10 @@ div.Battle, div.Explore{
         font-variant-numeric: tabular-nums;
         div.right{
           display: flex;
-          height: 24px;
+          height: 31px;
           select,
           button{
-            min-height: 24px;
+            min-height: 31px;
             border-width: 0 0 0 1px;
             border-radius: 0;
           }
@@ -553,7 +592,7 @@ div.Battle, div.Explore{
         }
       }
       > div:not(.description){
-        height: 26px;
+        height: 30px;
         display: flex;
         flex-direction: row;
         align-items: center;
@@ -564,7 +603,7 @@ div.Battle, div.Explore{
         color: var(--editor-muted);
         button{
           align-self: stretch;
-          min-height: 24px;
+          min-height: 29px;
           padding: 0 8px;
           border-width: 0 0 0 1px;
           border-radius: 0;
@@ -587,36 +626,81 @@ div.Battle, div.Explore{
       background: #0d121a;
       .controls{
         position: relative;
-        height: 24px;
+        height: 32px;
         overflow: hidden;
         border-bottom: 1px solid var(--editor-line);
-        background: #0a0f16;
+        background: linear-gradient(180deg, #0d131c, #090e15);
         cursor: col-resize;
+        .timeline-timecode{
+          position: absolute;
+          z-index: 4;
+          top: 6px;
+          left: 7px;
+          min-width: 51px;
+          padding: 2px 5px;
+          border: 1px solid rgba(103, 212, 255, 0.22);
+          border-radius: 4px;
+          background: rgba(9, 14, 21, 0.94);
+          color: #c9f3ff;
+          font-size: 10px;
+          font-variant-numeric: tabular-nums;
+          line-height: 14px;
+          pointer-events: none;
+        }
+        .timeline-ruler{
+          position: absolute;
+          z-index: 1;
+          inset: 0;
+          overflow: hidden;
+          pointer-events: none;
+          span{
+            position: absolute;
+            top: 7px;
+            transform: translateX(-50%);
+            color: #687890;
+            font-size: 9px;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            &::after{
+              position: absolute;
+              top: 16px;
+              left: 50%;
+              width: 1px;
+              height: 5px;
+              background: #526078;
+              content: '';
+            }
+          }
+        }
         .timelineGrab{
           position: absolute;
-          top: 0;
+          z-index: 5;
+          top: 20px;
           width: 0;
           height: 0;
-          border-right: 12px solid transparent;
-          border-left: 12px solid transparent;
-          border-top: 24px solid var(--editor-danger);
+          border-right: 7px solid transparent;
+          border-left: 7px solid transparent;
+          border-bottom: 12px solid var(--editor-danger);
           filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
         }
         .timeline-selection-help{
           position: absolute;
-          z-index: 2;
-          top: 4px;
+          z-index: 4;
+          top: 7px;
           right: 8px;
+          padding: 2px 5px;
+          border-radius: 4px;
+          background: rgba(9, 14, 21, 0.88);
           color: var(--editor-muted);
-          font-size: 11px;
-          line-height: 16px;
+          font-size: 10px;
+          line-height: 14px;
           pointer-events: none;
         }
       }
       .overlay{
         position: absolute;
         z-index: 1;
-        inset: 24px 0 10px;
+        inset: 32px 0 10px;
         overflow: hidden;
         pointer-events: none;
         .bar{
@@ -643,49 +727,109 @@ div.Battle, div.Explore{
       .events{
         position: relative;
         z-index: 2;
-        height: calc(100% - 34px);
+        height: calc(100% - 42px);
         overflow: hidden;
         cursor: default;
         touch-action: none;
         user-select: none;
-        > div{
+        > .timeline-lane{
           position: absolute;
+          left: 0;
           width: 100%;
-          height: 26px;
+          height: 30px;
           border-bottom: 1px solid rgba(41, 52, 70, 0.7);
           background: rgba(10, 15, 22, 0.36);
-          > div{
+          .timeline-marker,
+          .timeline-stack-marker{
             position: absolute;
-            width: 16px;
-            height: 16px;
-            margin-top: 4px;
+            z-index: 3;
+            top: 5px;
+            width: 18px;
+            min-width: 18px;
+            height: 20px;
+            min-height: 20px;
+            margin: 0;
+            padding: 0;
             border: 1px solid rgba(255, 255, 255, 0.28);
-            box-shadow: 0 2px 7px rgba(0, 0, 0, 0.35);
+            border-radius: 4px;
+            background: #8f9edb;
+            box-shadow: 0 2px 7px rgba(0, 0, 0, 0.42);
+            color: #071018;
             cursor: grab;
             touch-action: none;
-            transition: border-color 80ms ease, box-shadow 80ms ease, opacity 80ms ease;
+            transition: border-color 80ms ease, box-shadow 80ms ease, opacity 80ms ease, transform 100ms ease;
+            span{
+              display: block;
+              font-size: 7px;
+              font-weight: 850;
+              line-height: 18px;
+              letter-spacing: -0.03em;
+              text-align: center;
+            }
             &:hover{
               border-color: rgba(255, 255, 255, 0.72);
-              box-shadow: 0 0 0 2px rgba(103, 212, 255, 0.14), 0 2px 7px rgba(0, 0, 0, 0.35);
-            }
-            &.box{
-              border-radius: 4px;
-              background: #a8b6ff;
+              box-shadow: 0 0 0 2px rgba(103, 212, 255, 0.18), 0 4px 10px rgba(0, 0, 0, 0.45);
+              transform: translateY(-1px);
             }
             &.note{
-              transform: rotate(45deg) scale(0.78);
-              border-radius: 2px;
+              border-radius: 999px;
               background: var(--editor-positive);
             }
+            &.event-bgcolor{background: #b8a7ff;}
+            &.event-filter{background: #77d9ff;}
+            &.event-wiggle{background: #ff83ca;}
+            &.event-position{background: #7ce6ae;}
+            &.event-rotate{background: #ffc66f;}
+            &.event-scale{background: #ff967e;}
+            &.event-opacity,
+            &.event-visible{background: #d9e2ef;}
+            &.event-anchor{background: #9bd0ff;}
+            &.event-bpm,
+            &.event-ease{background: #e8a7ff;}
+            &.event-mcolor,
+            &.event-jcolor,
+            &.event-ncolor{background: #ffe18a;}
             &.selected{
               border-color: #ffffff;
-              background: var(--editor-accent);
-              box-shadow: 0 0 0 2px rgba(103, 212, 255, 0.24);
+              box-shadow: 0 0 0 2px rgba(103, 212, 255, 0.42), 0 4px 11px rgba(0, 0, 0, 0.48);
             }
             &.dragging{
               cursor: grabbing;
               opacity: 0.82;
               box-shadow: 0 0 0 3px rgba(103, 212, 255, 0.32), 0 5px 14px rgba(0, 0, 0, 0.48);
+            }
+            &.fanned{
+              z-index: 6;
+              animation: timeline-fan-in 100ms ease-out;
+            }
+          }
+          .timeline-stack{
+            position: absolute;
+            z-index: 4;
+            inset: 0;
+            pointer-events: none;
+            .timeline-stack-marker{
+              z-index: 7;
+              width: 20px;
+              min-width: 20px;
+              border-color: rgba(255, 255, 255, 0.5);
+              background: #a8b6ff;
+              color: #09111a;
+              cursor: pointer;
+              pointer-events: auto;
+              box-shadow: 2px -2px 0 rgba(168, 182, 255, 0.35), 4px -4px 0 rgba(168, 182, 255, 0.16), 0 3px 9px rgba(0, 0, 0, 0.48);
+              &.expanded{background: var(--editor-accent);}
+              &.selected{border-color: #ffffff;box-shadow: 0 0 0 2px rgba(103, 212, 255, 0.42), 2px -2px 0 rgba(168, 182, 255, 0.35);}
+              &.partially-selected{border-color: var(--editor-warning);}
+            }
+            .timeline-marker{pointer-events: auto;}
+            .timeline-stack-connector{
+              position: absolute;
+              z-index: 2;
+              top: 14px;
+              height: 1px;
+              background: rgba(103, 212, 255, 0.5);
+              pointer-events: none;
             }
           }
         }
@@ -721,6 +865,17 @@ div.Battle, div.Explore{
           }
         }
       }
+    }
+  }
+  @keyframes timeline-fan-in{
+    from{opacity: 0;transform: translateY(2px) scale(0.92);}
+    to{opacity: 1;transform: translateY(0) scale(1);}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .timeline-marker,
+    .timeline-stack-marker{
+      animation: none !important;
+      transition: none !important;
     }
   }
   .editor-playtest-status{

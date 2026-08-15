@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { event, obj } from '../../app/data/types'
 import {
+    alignTimelineNodes,
     allTimelineNodes,
     deleteTimelineNodes,
     moveTimelineNodes,
@@ -97,5 +98,19 @@ describe('editor timeline node operations', () => {
         expect(snapTimelineStamp(1.13, 0.25, 0, 4)).toBe(1.25)
         expect(snapTimelineStamp(-2, 0.25, 0, 4)).toBe(0)
         expect(snapTimelineStamp(8, 0.25, 0, 4)).toBe(4)
+    })
+
+    it('aligns a mixed selection to its active node and remaps sorted indexes', () => {
+        const aligned = alignTimelineNodes(content(), [
+            { kind:'main-event', index:0 },
+            { kind:'note', objectIndex:0, index:2 },
+        ])
+
+        expect(aligned.events.map(value => value.stamp)).toEqual([3, 4])
+        expect(aligned.objects[0].notes?.map(value => value.stamp)).toEqual([1, 2, 4])
+        expect(aligned.selection).toEqual([
+            { kind:'main-event', index:1 },
+            { kind:'note', objectIndex:0, index:2 },
+        ])
     })
 })
