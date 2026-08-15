@@ -62,7 +62,6 @@ export default defineConfig([
             'app/components/GameSession.tsx',
             'app/data/utils.tsx',
             'app/entry.tsx',
-            'app/logic/battleEngine.tsx',
             'app/main.tsx',
         ],
         rules:{

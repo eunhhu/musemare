@@ -375,13 +375,20 @@ div.Battle, div.Explore{
     flex-direction: row;
     justify-content: space-between;
     .timeline{
+      position: relative;
+      min-width: 0;
       width: 80%;
       height: 100%;
+      overflow: hidden;
       background-color: #444444;
       .controls{
+        position: relative;
+        height: 24px;
+        overflow: hidden;
         background-color: #2d2d2d;
         .timelineGrab{
-          margin-left: -12px;
+          position: absolute;
+          top: 0;
           width: 0;
           height: 0;
           border-right: 12px solid transparent;
@@ -391,7 +398,10 @@ div.Battle, div.Explore{
       }
       .overlay{
         position: absolute;
-        height: 100%;
+        z-index: 1;
+        inset: 24px 0 10px;
+        overflow: hidden;
+        pointer-events: none;
         .bar{
           position: absolute;
           height: 100%;
@@ -415,7 +425,9 @@ div.Battle, div.Explore{
         }
       }
       .events{
-        height: 100%;
+        position: relative;
+        z-index: 2;
+        height: calc(100% - 34px);
         overflow: hidden;
         div{
           position: absolute;
@@ -444,11 +456,16 @@ div.Battle, div.Explore{
       }
       .scrollbar-row{
         position: absolute;
+        z-index: 3;
+        right: 0;
         bottom: 0;
+        left: 0;
         height: 10px;
+        overflow: hidden;
         background-color: rgba($color: #202020, $alpha: 0.5);
-        width: 80%;
         div{
+          position: absolute;
+          top: 0;
           border-radius: 100px;
           background-color: rgba($color: #000000, $alpha: 0.5);
           width: 100%;
@@ -459,6 +476,7 @@ div.Battle, div.Explore{
     .objs{
       width: 20%;
       height: 100%;
+      overflow: hidden;
       background-color: #222222;
       .description{
         display: flex;
@@ -674,6 +692,79 @@ div.Battle, div.Explore{
   color: #ffffff;
   text-align: center;
   button{
+    padding: 0.75rem 1rem;
+    border: 1px solid #ffffff;
+    border-radius: 0.5rem;
+    background: #111111;
+    color: #ffffff;
+    cursor: pointer;
+  }
+}
+
+.Battle{
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.battle-gauge{
+  position: absolute;
+  z-index: 5;
+  top: clamp(0.75rem, 2vw, 1.5rem);
+  left: 50%;
+  width: min(42rem, calc(100vw - 3rem));
+  transform: translateX(-50%);
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+  text-shadow: 0 1px 3px #000000;
+  pointer-events: none;
+  .battle-gauge-label{
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.35rem;
+  }
+  .battle-gauge-track{
+    height: clamp(0.75rem, 2vh, 1.25rem);
+    overflow: hidden;
+    border: 2px solid #ffffff;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.65);
+  }
+  .battle-gauge-fill{
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #ff3b30, #ffd60a 45%, #34c759);
+    transition: width 120ms ease-out;
+  }
+  &.failed .battle-gauge-fill{
+    background: #ff3b30;
+  }
+}
+
+.battle-game-over{
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  background: rgba(0, 0, 0, 0.78);
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+  text-align: center;
+  h1,
+  p{
+    margin: 0;
+  }
+  > div{
+    display: flex;
+    gap: 0.75rem;
+  }
+  button{
+    min-width: 7rem;
     padding: 0.75rem 1rem;
     border: 1px solid #ffffff;
     border-radius: 0.5rem;

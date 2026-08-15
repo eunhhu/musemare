@@ -57,9 +57,21 @@ describe('battle judgement domain', () => {
     it('preserves the original tempo-scaled judgement windows', () => {
         expect(getJudgementWindows(0.5)).toEqual({
             perfect: 0.09,
+            great: 0.18,
             good: 0.27,
-            miss: 0.45,
+            bad: 0.45,
         })
+    })
+
+    it.each([
+        [0.08, 'perfect'],
+        [0.15, 'great'],
+        [0.25, 'good'],
+        [0.4, 'bad'],
+    ] as const)('classifies a %s second delta as %s', (delta, judgement) => {
+        const result = evaluateJudgements(prepareNotes([chart([10])]), [10 + delta], 10 + delta, {})
+
+        expect(result.judgements['0:0'].judge).toBe(judgement)
     })
 
     it('consumes a hit once and chooses the nearest eligible note', () => {
@@ -72,9 +84,20 @@ describe('battle judgement domain', () => {
         expect(result.pendingHits).toEqual([])
     })
 
+    it('uses simultaneous keys to resolve simultaneous notes on separate lines', () => {
+        const prepared = prepareNotes([chart([1]), chart([1])])
+        const result = evaluateJudgements(prepared, [1, 1], 1, {})
+
+        expect(result.judgements).toEqual({
+            '0:0': { judge:'perfect', hit:1 },
+            '1:0': { judge:'perfect', hit:1 },
+        })
+        expect(result.pendingHits).toEqual([])
+    })
+
     it('marks overdue notes missed and prunes stale unmatched hits', () => {
         const prepared = prepareNotes([chart([1])])
-        const result = evaluateJudgements(prepared, [0], 1.3, {})
+        const result = evaluateJudgements(prepared, [0], 1.5, {})
 
         expect(result.judgements['0:0'].judge).toBe('miss')
         expect(result.pendingHits).toEqual([])

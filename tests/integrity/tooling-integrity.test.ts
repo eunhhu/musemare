@@ -112,6 +112,7 @@ describe('toolchain integrity', () => {
         expect(existsSync('app/config/gameConfig.ts')).toBe(true)
         expect(existsSync('app/components/GameSession.tsx')).toBe(true)
         expect(existsSync('app/logic/gameSession.ts')).toBe(true)
+        expect(existsSync('app/logic/battleGauge.ts')).toBe(true)
         expect(existsSync('app/renderers/BattleRenderer.tsx')).toBe(true)
         expect(existsSync('app/renderers/ExploreRenderer.tsx')).toBe(true)
         expect(existsSync('app/logic/battleEngine.tsx')).toBe(false)

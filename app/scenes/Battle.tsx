@@ -18,6 +18,12 @@ import {
     timelineStampFromAudio,
     type JudgementState,
 } from '../logic/battleDomain'
+import {
+    applyBattleGaugeEvents,
+    collectNewGaugeEvents,
+    createBattleGaugeState,
+    type BattleGaugeState,
+} from '../logic/battleGauge'
 import { BattleRenderer } from '../renderers/BattleRenderer'
 import { isEditableTarget } from '../logic/input'
 import type { GameScene } from '../logic/gameSession'
@@ -41,19 +47,45 @@ function UnavailableBattle({ code, onBack }:{ code:LevelCode, onBack:() => void 
     </div>
 }
 
-function PlayableBattle({
-    levelData,
-    masterVolume,
-    progressTarget,
-    afterBattleScene,
-    setScene,
-}:{
+function BattleGauge({ gauge }:{ gauge:BattleGaugeState }) {
+    return <div
+        className={`battle-gauge${gauge.failed ? ' failed' : ''}`}
+        data-battle-health={gauge.health}
+        data-battle-failed={gauge.failed}
+    >
+        <div className="battle-gauge-label">
+            <span>HP</span>
+            <strong>{gauge.health}</strong>
+        </div>
+        <div
+            className="battle-gauge-track"
+            role="progressbar"
+            aria-label="Battle health"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={gauge.health}
+        >
+            <div className="battle-gauge-fill" style={{ width:`${gauge.health}%` }} />
+        </div>
+    </div>
+}
+
+type PlayableBattleProps = {
     levelData:level
     masterVolume:number
     progressTarget:BattleProgressTarget | null
     afterBattleScene:GameScene
     setScene:(scene:GameScene) => void
-}) {
+}
+
+function BattleAttempt({
+    levelData,
+    masterVolume,
+    progressTarget,
+    afterBattleScene,
+    setScene,
+    onRetry,
+}:PlayableBattleProps & { onRetry:() => void }) {
     const { width, height } = useWindowSize()
     const [timeline, setTimeline] = useState(0)
     const [audioPlaying, setAudioPlaying] = useState(false)
@@ -66,6 +98,8 @@ function PlayableBattle({
     const pendingHitsRef = useRef<number[]>([])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
+    const gaugeRef = useRef(createBattleGaugeState())
+    const [gauge, setGauge] = useState(createBattleGaugeState)
     const endingRef = useRef(false)
     const renderData = useMemo(() => lvlToRendata(levelData), [levelData])
     const preparedNotes = useMemo(() => prepareNotes(renderData.objs), [renderData])
@@ -74,7 +108,7 @@ function PlayableBattle({
 
     useAnimationFrame(() => {
         const audio = audioRef.current
-        if (!audio) return
+        if (!audio || gaugeRef.current.failed) return
 
         const currentTimeline = timelineStampFromAudio(audio, levelData.offset)
         const result = evaluateJudgements(
@@ -84,11 +118,26 @@ function PlayableBattle({
             judgementsRef.current,
         )
         pendingHitsRef.current = result.pendingHits
+        let nextGauge = gaugeRef.current
         if (result.judgements !== judgementsRef.current) {
+            nextGauge = applyBattleGaugeEvents(
+                gaugeRef.current,
+                collectNewGaugeEvents(preparedNotes, judgementsRef.current, result.judgements),
+            )
             judgementsRef.current = result.judgements
             setJudgements(result.judgements)
+            if (nextGauge !== gaugeRef.current) {
+                gaugeRef.current = nextGauge
+                setGauge(nextGauge)
+            }
         }
         setTimeline(currentTimeline)
+
+        if (nextGauge.failed) {
+            audio.pause()
+            setAudioPlaying(false)
+            return
+        }
 
         if (!endingRef.current && currentTimeline >= levelData.endpoint) {
             endingRef.current = true
@@ -144,7 +193,21 @@ function PlayableBattle({
             playing={audioPlaying}
             surfaceLabel="battle"
         />
+        <BattleGauge gauge={gauge} />
+        {gauge.failed && <div className="battle-game-over" role="dialog" aria-modal="true" aria-labelledby="battle-game-over-title">
+            <h1 id="battle-game-over-title">Game Over</h1>
+            <p>Health reached zero.</p>
+            <div>
+                <button type="button" onClick={onRetry}>Retry</button>
+                <button type="button" onClick={() => transitionTo(afterBattleScene)}>Leave</button>
+            </div>
+        </div>}
     </div>
+}
+
+function PlayableBattle(props:PlayableBattleProps) {
+    const [attempt, setAttempt] = useState(0)
+    return <BattleAttempt key={attempt} {...props} onRetry={() => setAttempt(current => current + 1)} />
 }
 
 export default function Index(){

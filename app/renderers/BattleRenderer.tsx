@@ -150,9 +150,13 @@ function renderJudgement(
 
     const fill = judgement.judge === 'perfect'
         ? 0x33ff00
-        : judgement.judge === 'good'
-            ? 0xdddd00
-            : 0xdd0000
+        : judgement.judge === 'great'
+            ? 0x44ddff
+            : judgement.judge === 'good'
+                ? 0xdddd00
+                : judgement.judge === 'bad'
+                    ? 0xff8800
+                    : 0xdd0000
     const position = getPos(object.position, stageSize)
 
     return <pixiText

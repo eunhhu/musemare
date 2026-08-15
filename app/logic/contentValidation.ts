@@ -33,7 +33,7 @@ const filterTypes = new Set<filterType>([
     'blur', 'dot', 'motionBlur', 'bloom', 'godray', 'convolution', 'glitch',
     'grayscale', 'noise', 'pixelate', 'rgbsplit',
 ])
-const judges = new Set<note['judge']>(['perfect', 'good', 'miss', 'none'])
+const judges = new Set<note['judge']>(['perfect', 'great', 'good', 'bad', 'miss', 'none'])
 
 export class ContentValidationError extends Error {
     constructor(path:string, expectation:string) {

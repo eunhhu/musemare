@@ -29,6 +29,15 @@ describe('content import validation', () => {
         expect(parseLevelJson(JSON.stringify(level))).toEqual(level)
     })
 
+    it.each(['bad', 'great'] as const)('accepts the %s rhythm judgement in imported charts', judgement => {
+        const level = structuredClone(levels.ending)
+        const chart = level.objs.find(object => object.type === 'chart' && object.notes?.length)
+        if (!chart?.notes) throw new Error('Ending chart fixture is missing notes.')
+        chart.notes[0].judge = judgement
+
+        expect(parseLevelJson(JSON.stringify(level)).objs).toContainEqual(chart)
+    })
+
     it('reports a nested invalid map path', () => {
         const map = {
             camera:{ position:[0, 0], rotation:0, scale:1, follow:'player' },

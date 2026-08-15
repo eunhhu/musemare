@@ -78,6 +78,7 @@ export function useEditorLayout() {
         }
         const wheel = (event:WheelEvent) => {
             if (!event.altKey) return
+            event.preventDefault()
             zoomRef.current -= zoomRef.current / 8 * (event.deltaY / 100)
             zoomRef.current = clamp(zoomRef.current, 100, 800)
             setZoom(zoomRef.current)
@@ -85,7 +86,7 @@ export function useEditorLayout() {
         const contextmenu = (event:Event) => event.preventDefault()
 
         window.addEventListener('resize', resizeCanvas)
-        document.addEventListener('wheel', wheel)
+        document.addEventListener('wheel', wheel, { passive:false })
         document.addEventListener('contextmenu', contextmenu)
         document.addEventListener('mousemove', mousemove)
         document.addEventListener('mousedown', mousedown)

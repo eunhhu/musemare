@@ -2,7 +2,7 @@ export type ease = 'linear'|'insine'|'outsine'|'sine'|'inquad'|'outquad'|'quad'|
 export type objEvType = 'position'|'rotate'|'scale'|'opacity'|'anchor'|'bpm'|'ease'|'visible'|'change'|'mcolor'|'jcolor'|'ncolor'|'drawer'|'shape'|'line'|'nline';
 export type mainEvType = 'bgcolor'|'filter'|'wiggle'|'position'|'rotate'|'scale';
 export type filterType = 'blur'|'dot'|'motionBlur'|'bloom'|'godray'|'convolution'|'glitch'|'grayscale'|'noise'|'pixelate'|'rgbsplit'
-export type judge = 'perfect'|'good'|'miss'|'none'
+export type judge = 'perfect'|'great'|'good'|'bad'|'miss'|'none'
 export type drawer = 'fill'|'stroke'
 export type eventValue = number|string|boolean|[number, number]
 

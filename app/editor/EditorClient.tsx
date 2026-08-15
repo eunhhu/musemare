@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { useRuntimeRoute } from '../components/RuntimeStatus'
 import { enableFilters, strengthFilters } from "../data/utils"
 import { obj, event, level, objEvent, eventProps, objEventProps, filter, filterType, eventValue } from "../data/types"
@@ -17,7 +17,14 @@ import { audioTimeToTimeline, buildGridLines, clampTimeline } from "../logic/tim
 import { useAnimationFrame } from "../hooks/useAnimationFrame"
 import { useRuntimeMedia } from '../hooks/useRuntimeMedia'
 import { parseLevelJson } from '../logic/contentValidation'
-import { clamp, timelineScrollMetrics } from '../logic/editorLayout'
+import {
+    clamp,
+    consumeWheelRows,
+    isTimelineMarkerVisible,
+    timelinePixelAt,
+    timelineScrollMetrics,
+    timelineStampAtPixel,
+} from '../logic/editorLayout'
 import { useEditorLayout } from './useEditorLayout'
 
 type ObjectEditorValue = string | number | boolean | [0|1, number]
@@ -101,6 +108,13 @@ export default function Page(){
     } = useRuntimeMedia<HTMLAudioElement>(song, 'Editor audio failed to decode.', Boolean(song))
     const fileInputRef = useRef<HTMLInputElement>(null)
     const timelineRef = useRef(0)
+    const timelineElementRef = useRef<HTMLDivElement>(null)
+    const controlsRef = useRef<HTMLDivElement>(null)
+    const objectsRef = useRef<HTMLDivElement>(null)
+    const scrollbarTrackRef = useRef<HTMLDivElement>(null)
+    const scrollbarThumbRef = useRef<HTMLDivElement>(null)
+    const colWheelRemainderRef = useRef(0)
+    const [timelineWidth, setTimelineWidth] = useState(0)
     const pendingHitsRef = useRef<number[]>([])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
@@ -118,7 +132,20 @@ export default function Page(){
         filters,
     }), [BackgroundColor, events, filters, objs, position, rotate, scale])
     const preparedNotes = useMemo(() => prepareNotes(objs), [objs])
+    const timelineViewportWidth = timelineWidth || Math.max(1, condset[0] / 100 * (100 - objLine))
+    const timelinePixel = (stamp:number) => timelinePixelAt(stamp, endpoint, timelineViewportWidth, zoom, rowScroll)
     useRuntimeRoute('battle-editor')
+
+    useLayoutEffect(() => {
+        const timelineElement = timelineElementRef.current
+        if (!timelineElement) return
+
+        const updateWidth = () => setTimelineWidth(timelineElement.getBoundingClientRect().width)
+        const observer = new ResizeObserver(updateWidth)
+        observer.observe(timelineElement)
+        updateWidth()
+        return () => observer.disconnect()
+    }, [])
     
     
     // new 눌렀을때 리셋
@@ -135,6 +162,7 @@ export default function Page(){
         resetZoom()
         setRowScroll(0)
         setColScroll(0)
+        colWheelRemainderRef.current = 0
         timelineRef.current = 0
         clearSeekEpoch()
         setEvents([])
@@ -183,6 +211,7 @@ export default function Page(){
             setEvClipboard(undefined)
             setRowScroll(0)
             setColScroll(0)
+            colWheelRemainderRef.current = 0
             timelineRef.current = 0
             setTimeline(0)
             setImportError(null)
@@ -288,8 +317,17 @@ export default function Page(){
     const timelineMouseMove = useEffectEvent((e:MouseEvent) => {
         const layout = layoutRef.current
         if(!layout.controlsDragging) return
+        const controls = controlsRef.current
+        if (!controls) return
 
-        let nextTimeline = (endpoint * (e.clientX-rowScroll - innerWidth/100*objLine) / (innerWidth/100*(100-objLine)))/(zoom/100)
+        const rect = controls.getBoundingClientRect()
+        let nextTimeline = timelineStampAtPixel(
+            e.clientX - rect.left,
+            endpoint,
+            rect.width,
+            zoomRef.current,
+            rowScroll,
+        )
         if(e.shiftKey && gridLine.length > 1){
             const exponent = 5-Math.round(zoom/100)
             const factor = 2**(exponent < 1 ? 1 : exponent)
@@ -305,7 +343,7 @@ export default function Page(){
     const scrollbarMouseMove = useEffectEvent((e:MouseEvent) => {
         const layout = layoutRef.current
         if (!layout.scrollbarDragging) return
-        const track = document.querySelector('.scrollbar-row') as HTMLDivElement | null
+        const track = scrollbarTrackRef.current
         if (!track) return
         const rect = track.getBoundingClientRect()
         const metrics = timelineScrollMetrics(rect.width, zoomRef.current, rowScroll)
@@ -338,8 +376,8 @@ export default function Page(){
     })
 
     useEffect(() => {
-        const controls = document.querySelector('.controls') as HTMLDivElement | null
-        const scrollbar = document.querySelector('.scrollbar-row > div') as HTMLDivElement | null
+        const controls = controlsRef.current
+        const scrollbar = scrollbarThumbRef.current
         const layout = layoutRef.current
 
         const mouseup = () => {
@@ -383,39 +421,55 @@ export default function Page(){
 
     // 휠버튼으로 타임라인 이동하는 코드
     useEffect(() => {
-        const ev = document.querySelector('.timeline') as HTMLDivElement // 타임라인 이벤트 엘레멘트
+        const timelineElement = timelineElementRef.current
+        if (!timelineElement) return
+        const activeTimelineElement = timelineElement
         // 휠 이벤트
         function wheelev(e:WheelEvent){
             if(!e.altKey){
-                const viewport = innerWidth / 100 * (100 - layoutRef.current.objects)
-                setRowScroll(current => timelineScrollMetrics(viewport, zoomRef.current, current - e.deltaY).scroll)
+                e.preventDefault()
+                const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+                const viewport = activeTimelineElement.getBoundingClientRect().width
+                setRowScroll(current => timelineScrollMetrics(viewport, zoomRef.current, current - delta).scroll)
             }
         }
-        ev.addEventListener('wheel', wheelev)
+        activeTimelineElement.addEventListener('wheel', wheelev, { passive:false })
         return () => {
-            ev.removeEventListener('wheel', wheelev)
+            activeTimelineElement.removeEventListener('wheel', wheelev)
         }
-    }, [layoutRef, zoomRef])
+    }, [zoomRef])
 
     // 휠버튼으로 오브젝트 스크롤 이동하는 코드
     useEffect(() => {
-        const ob = document.querySelector('.objs') as HTMLDivElement // 타임라인 이벤트 엘레멘트
+        const objectsElement = objectsRef.current
+        if (!objectsElement) return
+        const activeObjectsElement = objectsElement
         // 휠 이벤트
         function wheelev(e:WheelEvent){
             if(!e.altKey){
-                setColScroll(current => clamp(current + e.deltaY / 100, 0, objs.length))
+                e.preventDefault()
+                const pageSize = Math.max(activeObjectsElement.clientHeight, 1)
+                const delta = e.deltaMode === 1
+                    ? e.deltaY * 16
+                    : e.deltaMode === 2
+                        ? e.deltaY * pageSize
+                        : e.deltaY
+                const consumed = consumeWheelRows(colWheelRemainderRef.current, delta)
+                colWheelRemainderRef.current = consumed.remainder
+                if (consumed.rows !== 0) {
+                    setColScroll(current => clamp(current + consumed.rows, 0, objs.length))
+                }
             }
         }
-        ob.addEventListener('wheel', wheelev)
+        activeObjectsElement.addEventListener('wheel', wheelev, { passive:false })
         return () => {
-            ob.removeEventListener('wheel', wheelev)
+            activeObjectsElement.removeEventListener('wheel', wheelev)
         }
     }, [objs.length])
 
     useEffect(() => {
-        const viewport = condset[0] / 100 * (100 - objLine)
-        setRowScroll(current => timelineScrollMetrics(viewport, zoom, current).scroll)
-    }, [condset, objLine, zoom])
+        setRowScroll(current => timelineScrollMetrics(timelineViewportWidth, zoom, current).scroll)
+    }, [timelineViewportWidth, zoom])
 
     useEffect(() => {
         setColScroll(current => clamp(current, 0, objs.length))
@@ -748,7 +802,10 @@ export default function Page(){
         </>
     }
 
-    const scrollbar = timelineScrollMetrics(condset[0] / 100 * (100 - objLine), zoom, rowScroll)
+    const scrollbar = timelineScrollMetrics(timelineViewportWidth, zoom, rowScroll)
+    const playheadPixel = timelinePixel(timeline)
+    const gridDensityExponent = 5 - Math.round(zoom / 100)
+    const gridDensityFactor = 2 ** (gridDensityExponent < 1 ? 1 : gridDensityExponent)
 
     // html 코드
     return <div className="Editor">
@@ -924,7 +981,7 @@ export default function Page(){
             </div>
         </div>
         <div style={{height:`${underbarLine}%`}} className="underbar">
-            <div style={{width:`${objLine}%`}} className="objs">
+            <div ref={objectsRef} style={{width:`${objLine}%`}} className="objs">
                 <div className="description">Objects {timeline.toFixed(3)}
                     <div className="right">
                     <select name="" id="" value={sel} onChange={e => setSel(e.target.value as 'chart'|'sprite')}>
@@ -933,57 +990,81 @@ export default function Page(){
                     </select>
                     <button onClick={() => addObj()}>+</button></div>
                 </div>
-                {Math.round(colScroll) <= 0 && <div className={focusObj == 0 ? 'selected' : ''}
+                {colScroll <= 0 && <div className={focusObj == 0 ? 'selected' : ''}
                 onClick={() => {setFocusObj(0);setFocusing(0)}}>Main<button onClick={() => addEv()}>Add Event</button></div>}
                 {objs.map((v, i) => (
-                    Math.round(colScroll) <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
+                    colScroll <= i+1 && <div key={i} className={focusObj == i+1 ? 'selected' : ''} onClick={() => {setFocusObj(i+1);setFocusing(0)}}>{`Obj${i+1}`}
                     {v.type == 'chart' && <button onClick={() => addChartNote(i)}>Add Note</button>}
                     <button onClick={() => addObjEv(i)}>Add Event</button></div>
                 ))}
             </div>
-            <div style={{width:`${100-objLine}%`}} className="timeline">
-                <div className="controls">
-                    <div style={{marginLeft:`${(condset[0] /100 * (100-objLine) * timeline / endpoint)*(zoom/100) + rowScroll - 11}px`}} className="timelineGrab"></div>
+            <div ref={timelineElementRef} style={{width:`${100-objLine}%`}} className="timeline">
+                <div ref={controlsRef} className="controls">
+                    {isTimelineMarkerVisible(playheadPixel, timelineViewportWidth, 12) && <div
+                        style={{left:`${playheadPixel - 12}px`}}
+                        className="timelineGrab"
+                    />}
                 </div>
                 <div className="overlay">
-                    {gridLine.map((v, i) => (
-                        (condset[0] /100 * (100-objLine) * v / endpoint)*(zoom/100) + (condset[0] /100 * (100-objLine) * gridOffset / endpoint)*(zoom/100) + rowScroll >= 0 && (
-                        i == 0 ? <div key={i} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * gridOffset / endpoint)*(zoom/100) + rowScroll}px`}} className="grid start"></div> :
-                        i+1 == gridLine.length ? <div key={i} style={{marginLeft:`${(condset[0] /100 * (100-objLine))*(zoom/100) + rowScroll}px`}} className="grid end"></div> :
-                        i % (2**(5-Math.round(zoom/100) < 1 ? 1 : 5-Math.round(zoom/100))) == 0 &&
-                        <div style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v / endpoint)*(zoom/100) + (condset[0] /100 * (100-objLine) * gridOffset / endpoint)*(zoom/100) + rowScroll}px`}}
-                        className={i % (grid*(2**(5-Math.round(zoom/100) < 1 ? 1 : 5-Math.round(zoom/100)))) == 0 ? 'grid' : 'grid m'} key={i}></div>)
-                    ))}
-                    <div className="bar" style={{marginLeft:`${(condset[0] /100 * (100-objLine) * timeline / endpoint)*(zoom/100) + rowScroll}px`}}></div>
+                    {gridLine.map((value, index) => {
+                        const isStart = index === 0
+                        const isEnd = index + 1 === gridLine.length
+                        if (!isStart && !isEnd && index % gridDensityFactor !== 0) return null
+                        const pixel = timelinePixel(isEnd ? endpoint : value + gridOffset)
+                        if (!isTimelineMarkerVisible(pixel, timelineViewportWidth, 1)) return null
+                        const className = isStart
+                            ? 'grid start'
+                            : isEnd
+                                ? 'grid end'
+                                : index % (grid * gridDensityFactor) === 0
+                                    ? 'grid'
+                                    : 'grid m'
+                        return <div key={index} style={{left:`${pixel}px`}} className={className} />
+                    })}
+                    {isTimelineMarkerVisible(playheadPixel, timelineViewportWidth, 1) && <div
+                        className="bar"
+                        style={{left:`${playheadPixel}px`}}
+                    />}
                 </div>
                 <div className="events">
-                    {Math.round(colScroll) <= 0 && <div>
-                        {events.map((v, i) => (
-                            (condset[0] /100 * (100-objLine) * v.stamp / endpoint)*(zoom/100) + rowScroll >= 0 &&
-                            <div key={i} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v.stamp / endpoint)*(zoom/100) + rowScroll - 8}px`}}
-                            className={`box ${focusEvent[0] == 0 && focusEvent[1] == i ? 'selected' : ''}`}
-                            onClick={() => {setFocusEvent([0, i]);setFocusing(1)}}></div>
-                            ))}
+                    {colScroll <= 0 && <div>
+                        {events.map((eventValue, eventIndex) => {
+                            const pixel = timelinePixel(eventValue.stamp)
+                            return isTimelineMarkerVisible(pixel, timelineViewportWidth, 8) && <div
+                                key={eventIndex}
+                                style={{left:`${pixel - 8}px`}}
+                                className={`box ${focusEvent[0] == 0 && focusEvent[1] == eventIndex ? 'selected' : ''}`}
+                                onClick={() => {setFocusEvent([0, eventIndex]);setFocusing(1)}}
+                            />
+                        })}
                     </div>}
-                    {objs.map((v, i) => (
-                        Math.round(colScroll) <= i+1 && <div key={i} style={{marginTop:`${(i+1-Math.round(colScroll))*25.5}px`}}>
-                            {v.events.map((v2, i2) => (
-                                (condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll >= 0 &&
-                                <div key={i2} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll - 8}px`}}
-                                className={`box ${focusEvent[0] == i+1 && focusEvent[1] == i2 ? 'selected' : ''}`}
-                                onClick={() => {setFocusEvent([i+1, i2]);setFocusing(1)}}></div>
-                            ))}
-                            {v.type == 'chart' ? v.notes?.map((v2, i2) => (
-                                (condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll >= 0 &&
-                                <div key={i2} style={{marginLeft:`${(condset[0] /100 * (100-objLine) * v2.stamp / endpoint)*(zoom/100) + rowScroll - 8}px`}}
-                                className={`note ${focusNote[0] == i && focusNote[1] == i2 ? 'selected' : ''}`}
-                                onClick={() => {setFocusNote([i, i2]);setFocusing(2)}}></div>
-                            )) : <></>}
+                    {objs.map((object, objectIndex) => (
+                        colScroll <= objectIndex + 1 && <div key={objectIndex} style={{marginTop:`${(objectIndex + 1 - colScroll) * 25.5}px`}}>
+                            {object.events.map((objectEvent, eventIndex) => {
+                                const pixel = timelinePixel(objectEvent.stamp)
+                                return isTimelineMarkerVisible(pixel, timelineViewportWidth, 8) && <div
+                                    key={eventIndex}
+                                    style={{left:`${pixel - 8}px`}}
+                                    className={`box ${focusEvent[0] == objectIndex + 1 && focusEvent[1] == eventIndex ? 'selected' : ''}`}
+                                    onClick={() => {setFocusEvent([objectIndex + 1, eventIndex]);setFocusing(1)}}
+                                />
+                            })}
+                            {object.type == 'chart' ? object.notes?.map((note, noteIndex) => {
+                                const pixel = timelinePixel(note.stamp)
+                                return isTimelineMarkerVisible(pixel, timelineViewportWidth, 8) && <div
+                                    key={noteIndex}
+                                    style={{left:`${pixel - 8}px`}}
+                                    className={`note ${focusNote[0] == objectIndex && focusNote[1] == noteIndex ? 'selected' : ''}`}
+                                    onClick={() => {setFocusNote([objectIndex, noteIndex]);setFocusing(2)}}
+                                />
+                            }) : null}
                         </div>
                     ))}
                 </div>
-                <div className="scrollbar-row" style={{width:`${100-objLine}%`}}><div
-                style={{width:`${scrollbar.thumbWidth}px`, marginLeft:`${scrollbar.thumbLeft}px`}}></div></div>
+                <div ref={scrollbarTrackRef} className="scrollbar-row"><div
+                    ref={scrollbarThumbRef}
+                    style={{width:`${scrollbar.thumbWidth}px`, left:`${scrollbar.thumbLeft}px`}}
+                /></div>
             </div>
         </div>
         <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleLevelFile} style={{display:'none'}} />

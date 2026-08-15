@@ -32,6 +32,14 @@ The selector exposes this existing ending as a standalone playable level because
 
 The selector still exposes each map section so the unavailable entries and their original track identities can be inspected. Unavailable entries are disabled and never create an audio element or start a battle.
 
+## Battle Rules
+
+- Every battle starts at 100 health. Health is capped at 100.
+- Judgements change health by `Miss -10`, `Bad -1`, `Good +1`, `Great +2`, and `Perfect +3`.
+- Reaching zero at any point immediately latches game over; later judgements cannot revive the attempt. A clear requires at least one health through the end of the level.
+- Any supported gameplay key can hit a note. Simultaneous notes on separate chart lines require the same number of simultaneous key presses.
+- The editor and runtime share the same tempo-scaled judgement engine. The widest legacy window is now `Bad`; `Miss` means no key was received before that window closed.
+
 ## Level Availability
 
 - `Halv — Romanesque`, `Exyl — MOAI`, and `t+pazolite — Dogbite` retain their embedded event/object/note payloads and provenance, but remain explicitly unavailable because matching legally usable recordings are not present.

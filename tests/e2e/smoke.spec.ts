@@ -230,6 +230,31 @@ test('battle audio applies the persisted master volume', async ({ page }) => {
     await expectHealthy(page, failures)
 })
 
+test('battle latches game over at zero health and retry starts from 100', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.goto('/?scene=Battle&battle=ending', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'battle')
+
+    const audio = page.locator('audio')
+    await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).readyState >= HTMLMediaElement.HAVE_FUTURE_DATA)).toBe(true)
+    await audio.evaluate(element => {
+        const target = element as HTMLAudioElement
+        target.currentTime = 8
+    })
+
+    const gauge = page.locator('.battle-gauge')
+    await expect(gauge).toHaveAttribute('data-battle-health', '0')
+    await expect(gauge).toHaveAttribute('data-battle-failed', 'true')
+    await expect(page.getByRole('heading', { name:'Game Over' })).toBeVisible()
+    await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).paused)).toBe(true)
+
+    await page.getByRole('button', { name:'Retry' }).click()
+    await expect(gauge).toHaveAttribute('data-battle-health', '100')
+    await expect(gauge).toHaveAttribute('data-battle-failed', 'false')
+    await expect(page.getByRole('heading', { name:'Game Over' })).toHaveCount(0)
+    await expectHealthy(page, failures)
+})
+
 for (const scene of [
     { query:'/?scene=Battle&battle=ending', runtime:'battle', background:'#000000' },
     { query:'/?scene=Explore&explore=preview', runtime:'explore', background:'#000000' },
@@ -258,6 +283,28 @@ test('battle editor resizes its renderer and applies background changes', async 
     await expect(canvas).toHaveAttribute('data-pixi-background', '#123456')
     await page.setViewportSize({ width:1280, height:760 })
     await expectBackingDimensions(canvas)
+
+    const timeline = page.locator('.timeline')
+    await timeline.hover()
+    await page.keyboard.down('Alt')
+    await page.mouse.wheel(0, -800)
+    await page.keyboard.up('Alt')
+    await page.getByRole('button', { name:'End' }).click()
+    await expect(timeline.locator('.timelineGrab')).toHaveCount(0)
+    await expect(timeline.locator('.bar')).toHaveCount(0)
+    expect(await timeline.evaluate(element => getComputedStyle(element).overflow)).toBe('hidden')
+
+    await timeline.hover()
+    await page.mouse.wheel(0, 2_000)
+    await expect(timeline.locator('.timelineGrab')).toHaveCount(1)
+    await expect(timeline.locator('.bar')).toHaveCount(1)
+    await expect.poll(async () => {
+        const track = await timeline.locator('.scrollbar-row').boundingBox()
+        const thumb = await timeline.locator('.scrollbar-row > div').boundingBox()
+        return Boolean(track && thumb
+            && thumb.x >= track.x - 0.5
+            && thumb.x + thumb.width <= track.x + track.width + 0.5)
+    }).toBe(true)
     await expectHealthy(page, failures)
 })
 

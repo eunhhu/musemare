@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { clampEditorPanel, timelineScrollMetrics } from '../../app/logic/editorLayout'
+import {
+    clampEditorPanel,
+    consumeWheelRows,
+    isTimelineMarkerVisible,
+    timelinePixelAt,
+    timelineScrollMetrics,
+    timelineStampAtPixel,
+} from '../../app/logic/editorLayout'
 
 describe('editor layout bounds', () => {
     const layout = { underbar:30, mainset:20, eventset:20, objects:20 }
@@ -29,5 +36,27 @@ describe('editor layout bounds', () => {
             thumbWidth:400,
             thumbLeft:400,
         })
+    })
+
+    it('uses one reversible timeline coordinate system at every zoom and scroll', () => {
+        const pixel = timelinePixelAt(45, 90, 800, 200, -300)
+
+        expect(pixel).toBe(500)
+        expect(timelineStampAtPixel(pixel, 90, 800, 200, -300)).toBe(45)
+        expect(timelineStampAtPixel(-100, 90, 800, 200, -300)).toBeCloseTo(11.25)
+        expect(timelineStampAtPixel(2_000, 90, 800, 200, -300)).toBe(90)
+    })
+
+    it('clips timeline markers on both sides while keeping partially visible handles', () => {
+        expect(isTimelineMarkerVisible(-20, 800, 8)).toBe(false)
+        expect(isTimelineMarkerVisible(-4, 800, 8)).toBe(true)
+        expect(isTimelineMarkerVisible(804, 800, 8)).toBe(true)
+        expect(isTimelineMarkerVisible(820, 800, 8)).toBe(false)
+    })
+
+    it('accumulates trackpad movement into stable whole-row scrolling', () => {
+        expect(consumeWheelRows(0, 30)).toEqual({ rows:0, remainder:30 })
+        expect(consumeWheelRows(30, 60)).toEqual({ rows:1, remainder:10 })
+        expect(consumeWheelRows(10, -170)).toEqual({ rows:-2, remainder:0 })
     })
 })
