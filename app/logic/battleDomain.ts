@@ -3,6 +3,8 @@ import { calcEventValue } from '../data/utils'
 
 export const MAX_PENDING_HITS = 64
 const MAX_HIT_RETENTION_SECONDS = 2
+const TIMING_PRECISION = 1_000_000_000
+const TIMING_EPSILON_SECONDS = 1 / TIMING_PRECISION
 
 export type NoteId = `${number}:${number}`
 
@@ -11,7 +13,6 @@ export type PreparedNote = {
     objectIndex: number
     noteIndex: number
     stamp: number
-    beatDuration: number
 }
 
 export type JudgementRecord = {
@@ -26,7 +27,16 @@ export type JudgementWindows = {
     great: number
     good: number
     bad: number
+    miss: number
 }
+
+const JUDGEMENT_WINDOWS = Object.freeze({
+    perfect: 0.03334,
+    great: 0.05,
+    good: 0.06667,
+    bad: 0.08333,
+    miss: 0.1,
+}) satisfies JudgementWindows
 
 type AudioPlaybackState = {
     paused:boolean
@@ -39,19 +49,12 @@ type AudioTimelineState = {
     currentTime:number
 }
 
-function rounded(value: number) {
-    return Math.round(value * 1_000_000_000_000) / 1_000_000_000_000
+export function getJudgementWindows(): Readonly<JudgementWindows> {
+    return JUDGEMENT_WINDOWS
 }
 
-export function getJudgementWindows(beatDuration: number): JudgementWindows {
-    const tempoScale = 1 + ((0.4 / beatDuration - 1) / 2)
-
-    return {
-        perfect: rounded((beatDuration * 1 / 5) * tempoScale),
-        great: rounded((beatDuration * 2 / 5) * tempoScale),
-        good: rounded((beatDuration * 3 / 5) * tempoScale),
-        bad: rounded(beatDuration * tempoScale),
-    }
+function normalizeTiming(value:number) {
+    return Math.round(value * TIMING_PRECISION) / TIMING_PRECISION
 }
 
 export function resolveObjectBpmAt(object:obj, timeline:number) {
@@ -99,7 +102,6 @@ export function prepareNotes(objects: obj[]): PreparedNote[] {
             objectIndex,
             noteIndex,
             stamp: note.stamp,
-            beatDuration:60 / resolveObjectBpmAt(object, note.stamp),
         }))
     }).sort((left, right) => left.stamp - right.stamp)
 }
@@ -117,6 +119,9 @@ function judgeDelta(delta: number, windows: JudgementWindows): JudgementRecord['
     if (delta <= windows.bad) {
         return 'bad'
     }
+    if (delta <= windows.miss) {
+        return 'miss'
+    }
 }
 
 export function evaluateJudgements(
@@ -128,10 +133,8 @@ export function evaluateJudgements(
     let judgements = previous
     const consumedHits = new Set<number>()
     const assignedNotes = new Set<NoteId>(Object.keys(previous) as NoteId[])
-    const longestWindow = notes.reduce(
-        (longest, note) => Math.max(longest, getJudgementWindows(note.beatDuration).bad),
-        0,
-    )
+    const windows = getJudgementWindows()
+    const longestWindow = windows.miss
     const orderedHits = prunePendingHits(
         hits,
         timeline,
@@ -151,19 +154,19 @@ export function evaluateJudgements(
         let right = notes.length
         while (left < right) {
             const middle = Math.floor((left + right) / 2)
-            if (notes[middle].stamp < hit - longestWindow) left = middle + 1
+            if (notes[middle].stamp < hit - longestWindow - TIMING_EPSILON_SECONDS) left = middle + 1
             else right = middle
         }
 
         for (let noteIndex = left; noteIndex < notes.length; noteIndex += 1) {
             const note = notes[noteIndex]
-            if (note.stamp > hit + longestWindow) break
+            if (note.stamp > hit + longestWindow + TIMING_EPSILON_SECONDS) break
             if (assignedNotes.has(note.id)) {
                 continue
             }
 
-            const delta = Math.abs(hit - note.stamp)
-            if (delta <= getJudgementWindows(note.beatDuration).bad && delta < closestDelta) {
+            const delta = normalizeTiming(Math.abs(hit - note.stamp))
+            if (delta <= longestWindow && delta < closestDelta) {
                 closestNote = note
                 closestDelta = delta
             }
@@ -173,7 +176,7 @@ export function evaluateJudgements(
             return
         }
 
-        const judgement = judgeDelta(closestDelta, getJudgementWindows(closestNote.beatDuration))
+        const judgement = judgeDelta(closestDelta, windows)
         if (!judgement) {
             return
         }
@@ -189,11 +192,10 @@ export function evaluateJudgements(
             continue
         }
 
-        const windows = getJudgementWindows(note.beatDuration)
-        if (timeline - note.stamp > windows.bad) {
+        if (normalizeTiming(timeline - note.stamp) >= windows.miss) {
             recordJudgement(note.id, {
                 judge: 'miss',
-                hit: note.stamp + windows.bad,
+                hit: note.stamp + windows.miss,
             })
             assignedNotes.add(note.id)
         }

@@ -8,6 +8,7 @@ import {
     getJudgementWindows,
     isAudioActivelyPlaying,
     prepareNotes,
+    resolveObjectBpmAt,
     timelineStampFromAudio,
 } from '../../app/logic/battleDomain'
 
@@ -37,49 +38,72 @@ describe('battle judgement domain', () => {
     })
 
     it('resolves Moai judgement tempo at each note timestamp', () => {
-        const prepared = prepareNotes([levels.moai.objs[3]])
-        const beforeChange = prepared.find(note => note.stamp === 25.8)
-        const afterChange = prepared.find(note => note.stamp === 26.4)
+        const chartObject = levels.moai.objs[3]
 
-        expect(beforeChange?.beatDuration).toBeCloseTo(60 / 200, 9)
-        expect(afterChange?.beatDuration).toBeCloseTo(60 / 400, 9)
+        expect(resolveObjectBpmAt(chartObject, 25.8)).toBeCloseTo(200, 9)
+        expect(resolveObjectBpmAt(chartObject, 26.4)).toBeCloseTo(400, 9)
     })
 
     it('resolves sequential Dogbite BPM events with renderer semantics', () => {
-        const prepared = prepareNotes([levels.dogbite.objs[1]])
-        const firstChange = prepared.find(note => note.stamp === 50.581538)
-        const secondChange = prepared.find(note => note.stamp === 61.043076)
+        const chartObject = levels.dogbite.objs[1]
 
-        expect(firstChange?.beatDuration).toBeCloseTo(60 / 500, 9)
-        expect(secondChange?.beatDuration).toBeCloseTo(60 / 195, 9)
+        expect(resolveObjectBpmAt(chartObject, 50.581538)).toBeCloseTo(500, 9)
+        expect(resolveObjectBpmAt(chartObject, 61.043076)).toBeCloseTo(195, 9)
     })
 
-    it('preserves the original tempo-scaled judgement windows', () => {
-        expect(getJudgementWindows(0.5)).toEqual({
-            perfect: 0.09,
-            great: 0.18,
-            good: 0.27,
-            bad: 0.45,
+    it('uses fixed absolute judgement windows in seconds', () => {
+        expect(getJudgementWindows()).toEqual({
+            perfect: 0.03334,
+            great: 0.05,
+            good: 0.06667,
+            bad: 0.08333,
+            miss: 0.1,
         })
     })
 
     it.each([
-        [0.08, 'perfect'],
-        [0.15, 'great'],
-        [0.25, 'good'],
-        [0.4, 'bad'],
+        [0.03334, 'perfect'],
+        [0.03335, 'great'],
+        [0.05, 'great'],
+        [0.05001, 'good'],
+        [0.06667, 'good'],
+        [0.06668, 'bad'],
+        [0.08333, 'bad'],
+        [0.08334, 'miss'],
+        [0.1, 'miss'],
     ] as const)('classifies a %s second delta as %s', (delta, judgement) => {
-        const result = evaluateJudgements(prepareNotes([chart([10])]), [10 + delta], 10 + delta, {})
+        const result = evaluateJudgements(prepareNotes([chart([0])]), [delta], delta, {})
 
         expect(result.judgements['0:0'].judge).toBe(judgement)
     })
 
+    it('applies the same absolute window before and after notes at every BPM', () => {
+        for (const bpm of [60, 600]) {
+            const prepared = prepareNotes([chart([1], bpm)])
+            const early = evaluateJudgements(prepared, [0.95], 0.95, {})
+            const late = evaluateJudgements(prepared, [1.05], 1.05, {})
+
+            expect(early.judgements['0:0'].judge).toBe('great')
+            expect(late.judgements['0:0'].judge).toBe('great')
+        }
+    })
+
+    it('automatically misses an unhit note when the 100ms window closes', () => {
+        const prepared = prepareNotes([chart([1])])
+
+        expect(evaluateJudgements(prepared, [], 1.09999, {}).judgements).toEqual({})
+        expect(evaluateJudgements(prepared, [], 1.1, {}).judgements['0:0']).toEqual({
+            judge: 'miss',
+            hit: 1.1,
+        })
+    })
+
     it('consumes a hit once and chooses the nearest eligible note', () => {
-        const prepared = prepareNotes([chart([1, 1.2])])
-        const result = evaluateJudgements(prepared, [1.16], 1.16, {})
+        const prepared = prepareNotes([chart([1, 1.1])])
+        const result = evaluateJudgements(prepared, [1.08], 1.08, {})
 
         expect(result.judgements).toEqual({
-            '0:1': { judge: 'perfect', hit: 1.16 },
+            '0:1': { judge: 'perfect', hit: 1.08 },
         })
         expect(result.pendingHits).toEqual([])
     })

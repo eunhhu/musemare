@@ -65,8 +65,8 @@ describe('battle health gauge', () => {
 
     it('collects only newly assigned notes with their chart timestamps', () => {
         const notes:PreparedNote[] = [
-            { id:'0:0', objectIndex:0, noteIndex:0, stamp:1, beatDuration:0.5 },
-            { id:'1:0', objectIndex:1, noteIndex:0, stamp:1, beatDuration:0.5 },
+            { id:'0:0', objectIndex:0, noteIndex:0, stamp:1 },
+            { id:'1:0', objectIndex:1, noteIndex:0, stamp:1 },
         ]
         const previous:JudgementState = { '0:0':{ judge:'great', hit:1.1 } }
         const next:JudgementState = {
