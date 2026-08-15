@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { extname, join, relative, sep } from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { worldToScreen } from '../../app/logic/mapEditorDomain'
@@ -42,7 +42,9 @@ async function observeRuntimeFailures(page:Page):Promise<RuntimeFailures> {
     })
     page.on('pageerror', error => failures.pageErrors.push(error.stack ?? error.message))
     page.on('requestfailed', request => {
-        failures.requestFailures.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText ?? 'request failed'}`)
+        const errorText = request.failure()?.errorText ?? 'request failed'
+        if (request.url().startsWith('blob:') && errorText === 'net::ERR_ABORTED') return
+        failures.requestFailures.push(`${request.method()} ${request.url()}: ${errorText}`)
     })
     page.on('response', response => {
         if (response.status() >= 400) failures.responseFailures.push(`${response.status()} ${response.url()}`)
@@ -308,6 +310,47 @@ test('battle editor resizes its renderer and applies background changes', async 
     await expectHealthy(page, failures)
 })
 
+test('editor selects local audio and exports a portable embedded level', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.goto('/editor', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'battle-editor')
+
+    const audioPath = join(process.cwd(), 'public/assets/song/icyxis_true_ending.mp3')
+    await page.getByTestId('editor-song-file').setInputFiles(audioPath)
+
+    const sourceStatus = page.locator('[data-song-source-kind="local"]')
+    await expect(sourceStatus).toContainText('icyxis_true_ending.mp3')
+    await expect(sourceStatus).toContainText('embedded on export')
+    await expect(page.getByRole('button', { name:'Playtest' })).toBeEnabled()
+    await expect.poll(() => page.getByTestId('editor-audio').evaluate(element => (
+        (element as HTMLAudioElement).currentSrc.slice(0, 5)
+    ))).toBe('blob:')
+    await expectRuntimeReady(page, 'battle-editor')
+
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name:'Export' }).click()
+    const download = await downloadPromise
+    const downloadPath = await download.path()
+    if (!downloadPath) throw new Error('Exported level download has no local path.')
+    const exported = JSON.parse(readFileSync(downloadPath, 'utf8')) as { song:string, songName?:string }
+    expect(exported.songName).toBe('icyxis_true_ending.mp3')
+    expect(exported.song.startsWith('data:audio/mpeg;base64,')).toBe(true)
+    expect(exported.song.length).toBeGreaterThan(4_000_000)
+
+    await page.getByRole('button', { name:'Clear song' }).click()
+    await expect(page.locator('[data-song-source-kind]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name:'Playtest' })).toBeDisabled()
+
+    await page.getByTestId('editor-level-file').setInputFiles(downloadPath)
+    await expect(page.locator('[data-song-source-kind="embedded"]')).toContainText('icyxis_true_ending.mp3')
+    await expect.poll(() => page.getByTestId('editor-audio').evaluate(element => (
+        (element as HTMLAudioElement).currentSrc.slice(0, 11)
+    ))).toBe('data:audio/')
+    await expect(page.getByRole('button', { name:'Playtest' })).toBeEnabled()
+    await expectRuntimeReady(page, 'battle-editor')
+    await expectHealthy(page, failures)
+})
+
 test('editor fans out simultaneous events and supports grouped alignment', async ({ page }) => {
     const failures = await observeRuntimeFailures(page)
     await page.goto('/editor', { waitUntil:'domcontentloaded' })
@@ -366,7 +409,7 @@ test('editor playtest judges live input without triggering editing shortcuts', a
             ease:'linear', mcolor:'#ffffff', jcolor:'#0099ff', ncolor:'#ffffff', drawer:'fill', shape:'rect', line:3, nline:3,
         }],
     }
-    await page.locator('input[type="file"]').setInputFiles({
+    await page.getByTestId('editor-level-file').setInputFiles({
         name:'playtest-level.json',
         mimeType:'application/json',
         buffer:Buffer.from(JSON.stringify(level)),
@@ -438,7 +481,7 @@ test('editor playtest exposes the same latched game-over and restart flow', asyn
             ease:'linear', mcolor:'#ffffff', jcolor:'#0099ff', ncolor:'#ffffff', drawer:'fill', shape:'rect', line:3, nline:3,
         }],
     }
-    await page.locator('input[type="file"]').setInputFiles({
+    await page.getByTestId('editor-level-file').setInputFiles({
         name:'failure-level.json',
         mimeType:'application/json',
         buffer:Buffer.from(JSON.stringify(level)),
@@ -475,7 +518,10 @@ for (const invalidImport of [
         const failures = await observeRuntimeFailures(page)
         await page.goto(invalidImport.path, { waitUntil:'domcontentloaded' })
         await expectRuntimeReady(page, invalidImport.runtime)
-        await page.locator('input[type="file"]').setInputFiles({
+        const fileInput = invalidImport.path === '/editor'
+            ? page.getByTestId('editor-level-file')
+            : page.locator('input[type="file"]')
+        await fileInput.setInputFiles({
             name:'invalid.json',
             mimeType:'application/json',
             buffer:Buffer.from('{}'),
@@ -595,7 +641,7 @@ test('editor import pauses old audio and seeks after new source metadata', async
     const failures = await observeRuntimeFailures(page)
     await page.goto('/editor', { waitUntil:'domcontentloaded' })
     await expectRuntimeReady(page, 'battle-editor')
-    const input = page.locator('input[type="file"]')
+    const input = page.getByTestId('editor-level-file')
     const level = (offset:number, endpoint:number) => JSON.stringify({
         bpm:120,
         offset,

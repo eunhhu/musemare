@@ -29,6 +29,17 @@ describe('content import validation', () => {
         expect(parseLevelJson(JSON.stringify(level))).toEqual(level)
     })
 
+    it('preserves an optional embedded-audio filename and validates its type', () => {
+        const level = {
+            bpm:120, offset:0, song:'data:audio/mpeg;base64,SUQz', songName:'track.mp3',
+            backgroundColor:'#000000', volume:100, events:[], position:[0, 0],
+            rotate:0, scale:1, objs:[], filters, endpoint:90,
+        }
+
+        expect(parseLevelJson(JSON.stringify(level))).toEqual(level)
+        expect(() => parseLevelJson(JSON.stringify({ ...level, songName:42 }))).toThrow('level.songName')
+    })
+
     it('validates advanced wiggle controls without rejecting legacy wiggles', () => {
         const base = {
             bpm:120, offset:0, song:'', backgroundColor:'#000000', volume:100,

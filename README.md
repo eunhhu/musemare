@@ -71,6 +71,7 @@ Open `http://localhost:3000`. The editors are available at `/editor` and `/maped
 
 ### Battle editor
 
+- `Choose File` accepts local MP3, WAV, OGG, M4A, AAC, FLAC, and WebM audio. Local files play through a temporary Blob URL; exported level JSON embeds the audio and preserves its filename so reopening the JSON does not depend on a machine-local path.
 - `Space` — start or resume playtest while stopped. During playtest it is a note input like every other key; use the visible Pause button to pause.
 - `Home` / `End` — seek to the beginning or endpoint.
 - Mouse wheel — pan the timeline; `Alt` + wheel zooms.

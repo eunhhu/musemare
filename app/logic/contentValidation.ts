@@ -328,6 +328,7 @@ export function validateLevel(value:unknown):level {
     positive(result.bpm, 'level.bpm')
     finite(result.offset, 'level.offset')
     string(result.song, 'level.song')
+    if (result.songName !== undefined) string(result.songName, 'level.songName')
     color(result.backgroundColor, 'level.backgroundColor')
     const volume = finite(result.volume, 'level.volume')
     if (volume < 0 || volume > 100) throw new ContentValidationError('level.volume', 'between 0 and 100')

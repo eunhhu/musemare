@@ -488,6 +488,49 @@ div.Battle, div.Explore{
     }
     .mainset{
       border-right: 1px solid var(--editor-line);
+      .song-source-picker{
+        button{
+          flex: 0 1 112px;
+        }
+      }
+      .song-source-status{
+        align-items: flex-start;
+        margin: 3px 2px 7px;
+        padding: 7px;
+        border: 1px solid rgba(103, 212, 255, 0.18);
+        border-radius: 6px;
+        background: rgba(103, 212, 255, 0.07);
+        > span{
+          display: grid;
+          min-width: 0;
+          flex: 1;
+          gap: 2px;
+          strong{
+            color: var(--editor-accent);
+            font-size: 9px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+          }
+          > span{
+            overflow: hidden;
+            color: var(--editor-text);
+            font-weight: 650;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          small{
+            color: var(--editor-muted);
+            font-size: 9px;
+          }
+        }
+        > button{
+          width: 26px;
+          min-height: 26px;
+          flex: 0 0 26px;
+          padding: 0;
+          color: var(--editor-muted);
+        }
+      }
     }
     .eventset{
       border-left: 1px solid var(--editor-line);

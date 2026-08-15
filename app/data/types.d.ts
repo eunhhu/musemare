@@ -214,6 +214,7 @@ export interface level{
     bpm:number;
     offset:number;
     song:string;
+    songName?:string;
     backgroundColor:string;
     volume:number;
     events:event[];
@@ -224,4 +225,4 @@ export interface level{
     filters:filter;
     endpoint:number;
 }
-export type levelProps = 'bpm'|'offset'|'song'|'backgroundColor'|'volume'|'events'|'objs'|'endpoint'
+export type levelProps = 'bpm'|'offset'|'song'|'songName'|'backgroundColor'|'volume'|'events'|'objs'|'endpoint'

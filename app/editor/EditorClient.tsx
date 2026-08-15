@@ -30,6 +30,13 @@ import {
 } from '../logic/battleGauge'
 import { createGameplayKeyLatch } from '../logic/battleInput'
 import { clearEditorSeekEpoch, pauseAudioForLevelImport, seekAudioToLevelStart } from '../logic/editorAudio'
+import {
+    editorAudioFileAccept,
+    editorAudioFileError,
+    formatAudioFileSize,
+    isEmbeddedEditorAudioSource,
+    readEditorAudioFile,
+} from '../logic/editorAudioFile'
 import { isEditableTarget } from '../logic/input'
 import { audioTimeToTimeline, buildGridLines, clampTimeline } from "../logic/timing"
 import { useAnimationFrame } from "../hooks/useAnimationFrame"
@@ -70,6 +77,8 @@ type EventEditorValue = event[eventProps]
 type ObjectEventEditorValue = objEvent[objEventProps]
 type EventClipboard = { scope:'main', value:event } | { scope:'object', value:objEvent }
 type EditorPlaytestStatus = 'idle' | 'running' | 'paused' | 'failed' | 'cleared'
+type EditorError = { source:'Level import' | 'Audio file', message:string }
+type LocalAudioSelection = { objectUrl:string, name:string, size:number }
 type TimelineNodeDrag = {
     pointerId:number
     startClientX:number
@@ -172,12 +181,15 @@ export default function Page(){
     } = useEditorLayout()
     const [rowScroll, setRowScroll] = useState<number>(0)
     const [colScroll, setColScroll] = useState<number>(0)
-    const [importError, setImportError] = useState<string | null>(null)
+    const [editorError, setEditorError] = useState<EditorError | null>(null)
 
     // default settings
     const [bpm, setBpm] = useState<number>(100)
     const [offset, setOffset] = useState<number>(0)
     const [song, setSong] = useState<string>('')
+    const [songName, setSongName] = useState<string>('')
+    const [localAudio, setLocalAudio] = useState<LocalAudioSelection | null>(null)
+    const [audioImporting, setAudioImporting] = useState(false)
     const [BackgroundColor, setBackgroundColor] = useState<string>('#000000')
     const [volume, setVolume] = useState<number>(100)
     const [endpoint, setEndpoint] = useState<number>(90)
@@ -208,13 +220,17 @@ export default function Page(){
     const [timelineMarquee, setTimelineMarquee] = useState<TimelineMarquee | null>(null)
     const [activeTimelineStack, setActiveTimelineStack] = useState<string | null>(null)
     const [evClipboard, setEvClipboard] = useState<EventClipboard>()
+    const playbackSong = localAudio?.objectUrl ?? song
     const {
         mediaRef:audioRef,
         elementRef:audioElementRef,
         complete:completeAudio,
         fail:failAudio,
-    } = useRuntimeMedia<HTMLAudioElement>(song, 'Editor audio failed to decode.', Boolean(song))
+    } = useRuntimeMedia<HTMLAudioElement>(playbackSong, 'Editor audio failed to decode.', Boolean(playbackSong))
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const audioFileInputRef = useRef<HTMLInputElement>(null)
+    const localAudioUrlRef = useRef<string | null>(null)
+    const audioSelectionEpochRef = useRef(0)
     const timelineRef = useRef(0)
     const timelineElementRef = useRef<HTMLDivElement>(null)
     const controlsRef = useRef<HTMLDivElement>(null)
@@ -234,6 +250,14 @@ export default function Page(){
     const timelineMarqueeRef = useRef<TimelineMarquee | null>(null)
     const clearSeekEpoch = useCallback(() => {
         clearEditorSeekEpoch(pendingHitsRef, judgementsRef, setJudgements)
+    }, [])
+    const clearLocalAudio = useCallback(() => {
+        audioSelectionEpochRef.current += 1
+        const objectUrl = localAudioUrlRef.current
+        localAudioUrlRef.current = null
+        if (objectUrl) URL.revokeObjectURL(objectUrl)
+        setLocalAudio(null)
+        setAudioImporting(false)
     }, [])
     const renderData = useMemo(() => ({
         events,
@@ -326,14 +350,21 @@ export default function Page(){
         updateWidth()
         return () => observer.disconnect()
     }, [])
+    useEffect(() => () => {
+        audioSelectionEpochRef.current += 1
+        if (localAudioUrlRef.current) URL.revokeObjectURL(localAudioUrlRef.current)
+        localAudioUrlRef.current = null
+    }, [])
     
     
     // new 눌렀을때 리셋
     const reset = () => {
         pauseAudioForLevelImport(audioRef.current)
+        clearLocalAudio()
         setGrid(4)
         setBpm(100)
         setSong("")
+        setSongName("")
         setOffset(0)
         setBackgroundColor("#000000")
         setVolume(100)
@@ -351,8 +382,8 @@ export default function Page(){
         setEvClipboard(undefined)
         clearTimelineSelection()
         setFocusObj(0)
-        setImportError(null)
-        v_setTimeline(0)
+        setEditorError(null)
+        setTimeline(0)
     }
 
     const openLevel = () => {
@@ -362,17 +393,25 @@ export default function Page(){
         }
     }
 
+    const openAudioFile = () => {
+        if (!audioFileInputRef.current) return
+        audioFileInputRef.current.value = ''
+        audioFileInputRef.current.click()
+    }
+
     const handleLevelFile = async (change:ChangeEvent<HTMLInputElement>) => {
         const selectedFile = change.target.files?.[0]
         if (!selectedFile) return
         try {
             const loadedLevel = parseLevelJson(await selectedFile.text())
             pauseAudioForLevelImport(audioRef.current)
+            clearLocalAudio()
             setPlaying(false)
             resetPlaytestState()
             setBpm(loadedLevel.bpm)
             setOffset(loadedLevel.offset)
             setSong(loadedLevel.song)
+            setSongName(loadedLevel.songName ?? '')
             setBackgroundColor(loadedLevel.backgroundColor)
             setVolume(loadedLevel.volume)
             setEndpoint(loadedLevel.endpoint)
@@ -390,16 +429,78 @@ export default function Page(){
             colWheelRemainderRef.current = 0
             timelineRef.current = 0
             setTimeline(0)
-            setImportError(null)
+            setEditorError(null)
         } catch (error) {
             console.warn('Unable to open level JSON.', error)
-            setImportError(error instanceof Error ? error.message : 'Unable to open level JSON.')
+            setEditorError({
+                source:'Level import',
+                message:error instanceof Error ? error.message : 'Unable to open level JSON.',
+            })
+        }
+    }
+
+    const handleAudioFile = async (change:ChangeEvent<HTMLInputElement>) => {
+        const selectedFile = change.target.files?.[0]
+        change.target.value = ''
+        if (!selectedFile) return
+        const validationError = editorAudioFileError(selectedFile)
+        if (validationError) {
+            setEditorError({ source:'Audio file', message:validationError })
+            return
+        }
+
+        const selectionEpoch = audioSelectionEpochRef.current + 1
+        audioSelectionEpochRef.current = selectionEpoch
+        setAudioImporting(true)
+        try {
+            const serializedSong = await readEditorAudioFile(selectedFile)
+            if (audioSelectionEpochRef.current !== selectionEpoch) return
+            const objectUrl = URL.createObjectURL(selectedFile)
+            const previousObjectUrl = localAudioUrlRef.current
+
+            pauseAudioForLevelImport(audioRef.current)
+            setPlaying(false)
+            resetPlaytestState()
+            timelineRef.current = 0
+            setTimeline(0)
+            localAudioUrlRef.current = objectUrl
+            setLocalAudio({
+                objectUrl,
+                name:selectedFile.name,
+                size:selectedFile.size,
+            })
+            setSong(serializedSong)
+            setSongName(selectedFile.name)
+            setEditorError(null)
+            if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl)
+        } catch (error) {
+            if (audioSelectionEpochRef.current !== selectionEpoch) return
+            setEditorError({
+                source:'Audio file',
+                message:error instanceof Error ? error.message : 'Unable to read audio file.',
+            })
+        } finally {
+            if (audioSelectionEpochRef.current === selectionEpoch) setAudioImporting(false)
         }
     }
 
     const exportLevel = () => {
         const _a = document.createElement('a') as HTMLAnchorElement
-        const _obj:level = {bpm, events, endpoint, objs, offset, song, volume, backgroundColor:BackgroundColor, position, rotate, scale, filters}
+        const _obj:level = {
+            bpm,
+            events,
+            endpoint,
+            objs,
+            offset,
+            song,
+            ...(songName ? { songName } : {}),
+            volume,
+            backgroundColor:BackgroundColor,
+            position,
+            rotate,
+            scale,
+            filters,
+        }
         _a.download = 'level.json'
         const _blob = new Blob([JSON.stringify(_obj)], {type:'application/json'})
         _a.href = URL.createObjectURL(_blob)
@@ -409,7 +510,7 @@ export default function Page(){
 
     async function startPlaytestAt(start:number) {
         const audio = audioRef.current
-        if (!audio || !song) return
+        if (!audio || !playbackSong) return
         const nextStart = clampTimeline(start >= endpoint ? 0 : start, endpoint)
         beginPlaytestEpoch(nextStart)
         timelineRef.current = nextStart
@@ -430,7 +531,7 @@ export default function Page(){
 
     async function playLevel (){
         const audio = audioRef.current
-        if (!audio || !song || (playtestStatus === 'running' && !playing)) return
+        if (!audio || !playbackSong || (playtestStatus === 'running' && !playing)) return
 
         if (playing) {
             audio.pause()
@@ -468,7 +569,7 @@ export default function Page(){
         setPlaying(false)
         resetPlaytestState()
         timelineRef.current = nextTimeline
-        if (audioRef.current && song) {
+        if (audioRef.current && playbackSong) {
             audioRef.current.currentTime = nextTimeline + offset
         }
         setTimeline(nextTimeline)
@@ -477,11 +578,11 @@ export default function Page(){
     useEffect(() => {
         const audio = audioRef.current
         if (!audio) return
-        if (!song) return
+        if (!playbackSong) return
         resetPlaytestState()
         const sourceEpoch = sourceEpochRef.current + 1
         sourceEpochRef.current = sourceEpoch
-        const expectedSource = new URL(song, window.location.href).href
+        const expectedSource = new URL(playbackSong, window.location.href).href
         const seekToImportedOffset = () => {
             if (sourceEpochRef.current !== sourceEpoch || audio.currentSrc !== expectedSource) return
             if (!seekAudioToLevelStart(audio, offset)) return
@@ -499,7 +600,7 @@ export default function Page(){
             audio.removeEventListener('loadedmetadata', seekToImportedOffset)
             if (sourceEpochRef.current === sourceEpoch) sourceEpochRef.current += 1
         }
-    }, [audioRef, offset, resetPlaytestState, song])
+    }, [audioRef, offset, playbackSong, resetPlaytestState])
 
     useAnimationFrame(() => {
         const audio = audioRef.current
@@ -1335,11 +1436,14 @@ export default function Page(){
 
     const changeSong = (nextSong:string) => {
         pauseAudioForLevelImport(audioRef.current)
+        clearLocalAudio()
         setPlaying(false)
         resetPlaytestState()
         timelineRef.current = 0
         setTimeline(0)
         setSong(nextSong)
+        setSongName('')
+        setEditorError(null)
     }
 
     // easing
@@ -1394,23 +1498,39 @@ export default function Page(){
         failed:'Playtest failed',
         cleared:'Playtest clear',
     }
+    const songSourceKind = localAudio
+        ? 'local'
+        : isEmbeddedEditorAudioSource(song)
+            ? 'embedded'
+            : song
+                ? 'url'
+                : 'none'
+    const songSourceLabel = (localAudio?.name ?? songName)
+        || (songSourceKind === 'embedded' ? 'Embedded audio' : song)
+    const songSourceDetail = localAudio
+        ? `${formatAudioFileSize(localAudio.size)} · embedded on export`
+        : songSourceKind === 'embedded'
+            ? 'stored inside level JSON'
+            : 'external URL'
 
     // html 코드
     return <div className={`Editor playtest-${playtestStatus}`}>
-        {importError && <div className="import-error" role="alert">Level import rejected: {importError}</div>}
+        {editorError && <div className="import-error" role="alert">
+            {editorError.source} rejected: {editorError.message}
+        </div>}
         <div style={{height:`${100-underbarLine}%`}} className="workspace">
             <div style={{width:`${mainsetLine}%`}} className="mainset">
                 <div>
                     <button onClick={() => reset()}>New</button>
                     <button onClick={() => openLevel()}>Open</button>
-                    <button onClick={() => exportLevel()}>Export</button>
+                    <button onClick={() => exportLevel()} disabled={audioImporting}>Export</button>
                 </div>
                 <div>
                     <button onClick={() => v_setTimeline(0)}>Home</button>
                     <button
                         className="playlevel"
                         onClick={() => void playLevel()}
-                        disabled={!song || (playtestStatus === 'running' && !playing)}
+                        disabled={audioImporting || !playbackSong || (playtestStatus === 'running' && !playing)}
                     >{transportLabel}</button>
                     <button onClick={() => v_setTimeline(endpoint)}>End</button>
                 </div>
@@ -1422,7 +1542,34 @@ export default function Page(){
                         <div>Grid Offset<input type="text" name="" id="" value={gridOffset} onChange={e => setGridOffset(+e.target.value)} /></div>
                         <div>BPM<input type="text" name="" id="" value={bpm} onChange={e => setBpm(+e.target.value)} /></div>
                         <div>Offsets<input type="text" name="" id="" value={offset} onChange={e => changeOffset(+e.target.value)} /></div>
-                        <div>Song<input type="text" name="" id="" value={song} onChange={e => changeSong(e.target.value)} /></div>
+                        <div className="song-source-picker">
+                            <span>Song</span>
+                            <button type="button" onClick={openAudioFile} disabled={audioImporting}>
+                                {audioImporting ? 'Importing…' : 'Choose File'}
+                            </button>
+                        </div>
+                        <div className="song-source-url">
+                            <span>URL</span>
+                            <input
+                                type="text"
+                                aria-label="Song URL"
+                                value={songSourceKind === 'url' ? song : ''}
+                                placeholder={songSourceKind === 'none' ? '/music/song.mp3' : 'Using selected audio'}
+                                onChange={event => changeSong(event.target.value)}
+                            />
+                        </div>
+                        {songSourceKind !== 'none' && <div
+                            className="song-source-status"
+                            data-song-source-kind={songSourceKind}
+                            title={songSourceLabel}
+                        >
+                            <span>
+                                <strong>{songSourceKind}</strong>
+                                <span>{songSourceLabel}</span>
+                                <small>{songSourceDetail}</small>
+                            </span>
+                            <button type="button" aria-label="Clear song" onClick={() => changeSong('')}>×</button>
+                        </div>}
                         <div>BackgroundColor<input type="color" name="" id="" value={BackgroundColor} onChange={e => setBackgroundColor(e.target.value)}/></div>
                         <div>Volume<input type="text" name="" id="" value={volume} onChange={e => setVolume(+e.target.value)}/></div>
                         <div>Endpoint<input type="text" name="" id="" value={`${Math.floor(endpoint/60)}:${endpoint%60}`}
@@ -1491,7 +1638,9 @@ export default function Page(){
                     <span>{timeline.toFixed(3)}s</span>
                 </div>
                 {playtestStatus !== 'idle' && <BattleGauge gauge={gauge} className="editor-battle-gauge" />}
-                {!song && <div className="editor-preview-hint">Set a song source to start playtest.</div>}
+                {!playbackSong && <div className="editor-preview-hint">
+                    {audioImporting ? 'Encoding local audio…' : 'Choose a local song or set a URL to start playtest.'}
+                </div>}
                 {(playtestStatus === 'failed' || playtestStatus === 'cleared') && <div
                     className={`editor-playtest-result ${playtestStatus}`}
                     role="dialog"
@@ -1771,11 +1920,27 @@ export default function Page(){
                 /></div>
             </div>
         </div>
-        <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleLevelFile} style={{display:'none'}} />
+        <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            data-testid="editor-level-file"
+            onChange={handleLevelFile}
+            style={{display:'none'}}
+        />
+        <input
+            ref={audioFileInputRef}
+            type="file"
+            accept={editorAudioFileAccept}
+            aria-label="Local audio file"
+            data-testid="editor-song-file"
+            onChange={handleAudioFile}
+            style={{display:'none'}}
+        />
         <audio
             ref={audioElementRef}
             data-testid="editor-audio"
-            src={song || undefined}
+            src={playbackSong || undefined}
             preload="auto"
             style={{display:'none'}}
             onCanPlayThrough={event => completeAudio(event.currentTarget)}
