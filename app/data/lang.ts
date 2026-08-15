@@ -1,4 +1,6 @@
-const langs:{[key:string]:{[key:string]:string}} = {
+export type SupportedLanguage = 'en-US' | 'ko-KR'
+
+const langs:Record<string, { ko:string, en:string }> = {
     '':{
         'ko':'',
         'en':'',
@@ -38,6 +40,22 @@ const langs:{[key:string]:{[key:string]:string}} = {
     'audio':{
         'ko':'오디오',
         'en':'Audio',
+    },
+    'language':{
+        'ko':'언어',
+        'en':'Language',
+    },
+    'master volume':{
+        'ko':'전체 음량',
+        'en':'Master Volume',
+    },
+    'renderer':{
+        'ko':'렌더러',
+        'en':'Renderer',
+    },
+    'video notice':{
+        'ko':'현재 변경 가능한 비디오 옵션이 없습니다.',
+        'en':'There are no configurable video options yet.',
     },
     'press skip':{
         'ko':'[F]키를 눌러 스킵',
@@ -105,6 +123,12 @@ const langs:{[key:string]:{[key:string]:string}} = {
     },
 }
 
-export function toLang(lang:string, data:string){
-    return langs[data][lang.replace(/-\w+/, '')]
+export function normalizeLanguage(language:string | null | undefined):SupportedLanguage {
+    return language?.toLowerCase().startsWith('ko') ? 'ko-KR' : 'en-US'
+}
+
+export function toLang(language:string, data:string) {
+    const translations = langs[data]
+    if (!translations) return data
+    return translations[normalizeLanguage(language).startsWith('ko') ? 'ko' : 'en'] ?? translations.en ?? data
 }

@@ -172,7 +172,7 @@ describe('embedded level integrity', () => {
         if (!existsSync(manifestPath)) return
 
         const entries = readFileSync(manifestPath, 'utf8').trim().split('\n').filter(Boolean).map(line => {
-            const match = line.match(/^([a-f0-9]{64})  (public\/assets\/.+)$/)
+            const match = line.match(/^([a-f0-9]{64}) {2}(public\/assets\/.+)$/)
             expect(match, `invalid asset manifest line: ${line}`).not.toBeNull()
             return { digest:match?.[1] ?? '', path:match?.[2] ?? '' }
         })

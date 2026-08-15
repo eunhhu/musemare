@@ -1,18 +1,22 @@
-'use client'
-
-import Image from 'next/image'
-import { useContext } from "react"
-import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
-import { globalContext } from "../main"
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { useGameSession } from '../components/GameSession'
 import { toLang } from "../data/lang"
 import { useSceneFade } from "../hooks/useSceneFade"
-import { createRuntimeAssetFailure } from '../logic/runtimeAssets'
+import { useRuntimeImage } from '../hooks/useRuntimeImage'
 
 export default function Index(){
-    const {lang, setScene} = useContext(globalContext)
-    const { style, transitionTo } = useSceneFade(setScene)
-    const titleTask = useRuntimeTask('asset', '/assets/ui/title.svg')
-    const backgroundTask = useRuntimeTask('asset', '/assets/background/menubg.png')
+    const { lang, navigate } = useGameSession()
+    const { style, transitionTo } = useSceneFade(navigate)
+    const {
+        imageRef:titleImageRef,
+        complete:completeTitleImage,
+        fail:failTitleImage,
+    } = useRuntimeImage('/assets/ui/title.svg', 'Title image failed to decode.')
+    const {
+        imageRef:backgroundImageRef,
+        complete:completeBackgroundImage,
+        fail:failBackgroundImage,
+    } = useRuntimeImage('/assets/background/menubg.png', 'Menu background failed to decode.')
     useRuntimeRoute('main-menu')
 
     const buttonInput = (str:string) => {
@@ -24,29 +28,31 @@ export default function Index(){
 
     return <div style={style}
     className="MainMenu fullscreen blackbg">
-        <Image
+        <img
+            ref={backgroundImageRef}
             className="MainMenu-background"
             src="/assets/background/menubg.png"
             alt=""
-            fill={true}
-            priority={true}
-            sizes="100vw"
-            onLoad={backgroundTask.complete}
-            onError={() => backgroundTask.fail(createRuntimeAssetFailure('/assets/background/menubg.png', new Error('Menu background failed to decode.')))}
+            fetchPriority="high"
+            decoding="async"
+            onLoad={completeBackgroundImage}
+            onError={failBackgroundImage}
         />
         <div>
-            <Image
+            <img
+                ref={titleImageRef}
                 src="/assets/ui/title.svg"
                 alt="MuseMare"
                 width={983}
                 height={225}
-                priority={true}
-                onLoad={titleTask.complete}
-                onError={() => titleTask.fail(createRuntimeAssetFailure('/assets/ui/title.svg', new Error('Title image failed to decode.')))}
+                loading="eager"
+                decoding="async"
+                onLoad={completeTitleImage}
+                onError={failTitleImage}
             />
             <div className="menu">
                 {['new game', 'continue', 'settings', 'credits'].map((v, i) => (
-                    <div key={i} onClick={() => buttonInput(v)}>{toLang(lang, v)}</div>
+                    <button type="button" key={i} onClick={() => buttonInput(v)}>{toLang(lang, v)}</button>
                 ))}
             </div>
         </div>

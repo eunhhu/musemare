@@ -3,6 +3,7 @@ import {
     clientPointToWorld,
     normalizeDragRectangle,
     screenToWorld,
+    updateEventTarget,
     worldToScreen,
 } from '../../app/logic/mapEditorDomain'
 
@@ -54,5 +55,20 @@ describe('map editor drag rectangles', () => {
     it('rejects non-invertible camera scales', () => {
         const camera = { position:[0, 0] as [number, number], rotation:0, scale:0, follow:'' }
         expect(screenToWorld([10, 10], [1000, 1000], camera)).toBeUndefined()
+    })
+})
+
+describe('map event editing', () => {
+    it('updates numeric and string targets without mutating the event list', () => {
+        const events = [
+            { eventName:'collision', target:2, scripts:[] },
+            { eventName:'click', target:'player', scripts:[] },
+        ]
+        const numeric = updateEventTarget(events, 0, '7')
+        const named = updateEventTarget(numeric, 1, 'door')
+
+        expect(numeric[0].target).toBe(7)
+        expect(named[1].target).toBe('door')
+        expect(events[0].target).toBe(2)
     })
 })

@@ -1,5 +1,3 @@
-'use client'
-
 import { type PixiElements } from '@pixi/react'
 import { Assets, Texture, type Texture as PixiTexture } from 'pixi.js'
 import { useEffect, useState } from 'react'

@@ -12,14 +12,69 @@
 }
 
 html,
-body {
+body,
+#root {
   width: 100%;
   height: 100%;
   margin: 0;
 }
 
+.RouteNotFound{
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  gap: 1rem;
+  background: #000000;
+  color: #ffffff;
+  text-align: center;
+  a{color: inherit;}
+}
+
 #musemare-runtime {
   display: contents;
+}
+
+.runtime-failure{
+  position: fixed;
+  z-index: 10000;
+  right: 1rem;
+  bottom: 1rem;
+  display: grid;
+  max-width: min(32rem, calc(100vw - 2rem));
+  gap: 0.4rem;
+  padding: 0.9rem;
+  border: 1px solid #ff7272;
+  border-radius: 0.5rem;
+  background: rgba(36, 0, 0, 0.96);
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+  overflow-wrap: anywhere;
+  span{font-family: inherit;font-size: 0.85rem;}
+  button{
+    justify-self: end;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid #ffffff;
+    border-radius: 0.3rem;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+}
+
+.import-error{
+  position: fixed;
+  z-index: 9999;
+  top: 0.5rem;
+  left: 50%;
+  max-width: calc(100vw - 2rem);
+  transform: translateX(-50%);
+  padding: 0.55rem 0.9rem;
+  border: 1px solid #ff7272;
+  border-radius: 0.35rem;
+  background: rgba(55, 0, 0, 0.96);
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+  overflow-wrap: anywhere;
 }
 
 body {
@@ -51,6 +106,7 @@ body {
 }
 
 .MainMenu{
+  position: relative;
   background-color: black;
   color: white;
   user-select: none;
@@ -60,8 +116,8 @@ body {
     position: absolute;
     z-index: 0;
     inset: 0;
-    width: 100% !important;
-    height: 100% !important;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
   }
   > div{
@@ -85,7 +141,7 @@ body {
       height: unset;
       top: unset;
       left: unset;
-      div{
+      button{
         position: relative;
         top: unset;
         left: unset;
@@ -93,8 +149,12 @@ body {
         padding: min(1vh, 0.6vw);
         width: fit-content;
         cursor: pointer;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
       }
-      div:hover{
+      button:hover{
         text-decoration: underline;
       }
     }
@@ -161,7 +221,7 @@ body {
       justify-content: space-around;
       height: 10%;
       border-bottom: 1px solid white;
-      div{
+      button{
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -170,6 +230,9 @@ body {
         cursor: pointer;
         font-size: min(3vh, 1.5vw);
         border-radius: min(3vh, 1.5vw);
+        border: 0;
+        background: transparent;
+        color: inherit;
         &:hover{
           text-decoration: underline;
         }
@@ -181,6 +244,28 @@ body {
     .options{
       height: 90%;
       padding: min(1vw, 2vh);
+      overflow: auto;
+      font-family: Arial, sans-serif;
+      .setting-row{
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        min-height: 3rem;
+        padding: 0.5rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+        span{flex: 1;font-family: inherit;}
+        input, select, output{font-family: monospace;}
+        input:not([type="range"]), select{
+          min-width: 10rem;
+          padding: 0.45rem;
+          border: 1px solid #777777;
+          border-radius: 0.25rem;
+          background: #151515;
+          color: #ffffff;
+        }
+        input[type="range"]{width: min(25rem, 50vw);}
+      }
+      .video-settings p{font-family: Arial, sans-serif;color:#c5c5c5;}
     }
   }
 }
@@ -194,6 +279,8 @@ body {
   padding: min(2vh, 1vw);
   border-radius: min(2vh, 1vw);
   font-size: min(2.4vh, 1.3vw);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: inherit;
   &:hover{text-decoration: underline;}
 }
 
@@ -207,6 +294,7 @@ body {
 }
 
 .Intro{
+  position: relative;
   user-select: none;
   .skip{
     position: absolute;
@@ -226,10 +314,10 @@ body {
   background-color: #000000;
   color: #ffffff;
   > img{
-    position: absolute !important;
+    position: absolute;
     inset: 0;
-    width: 100% !important;
-    height: 100% !important;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
   }
   .Intro-fallback-content{
@@ -497,13 +585,14 @@ div.Battle, div.Explore{
       }
     }
   }
-  div.back{
+  .back{
     position: fixed;
     width: 100%;
     height: 100%;
     left: 0;
     top: 0;
     background-color: rgba(0, 0, 0, 0.3);
+    border: 0;
   }
   div.eventmap{
     position: fixed;
@@ -544,7 +633,7 @@ div.Battle, div.Explore{
   flex-direction: column;
   justify-content: space-around;
   > div:not(.goback, .availability-note),
-  > button{
+  > button:not(.goback){
     border: 2px solid white;
     transform: translate(100%, 0);
     font-size: min(4vw, 8vh);

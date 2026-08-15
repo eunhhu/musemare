@@ -18,7 +18,7 @@ export default defineConfig({
         viewport: { width: 1440, height: 900 },
     },
     webServer: {
-        command: 'npm run start:standalone',
+        command: 'bun run preview',
         env: { PORT: '3100' },
         url: 'http://127.0.0.1:3100',
         reuseExistingServer: false,

@@ -1,5 +1,3 @@
-'use client'
-
 import {
     createContext,
     useCallback,
@@ -58,8 +56,7 @@ export function RuntimeStatusProvider({ children }:{ children:ReactNode }) {
         })
     }, [applyTaskAction])
     const beginTask = useCallback((id:string, generation:RuntimeTaskGeneration, task:RuntimeTask) => {
-        setSettled(false)
-        applyTaskAction({ type:'begin', id, generation, task })
+        if (applyTaskAction({ type:'begin', id, generation, task })) setSettled(false)
     }, [applyTaskAction])
     const completeTask = useCallback((id:string, generation:RuntimeTaskGeneration) => {
         if (applyTaskAction({ type:'complete', id, generation })) setSettled(false)
@@ -86,7 +83,7 @@ export function RuntimeStatusProvider({ children }:{ children:ReactNode }) {
             cancelAnimationFrame(firstFrame)
             cancelAnimationFrame(secondFrame)
         }
-    }, [failure, pendingCount, route.name, route.ready])
+    }, [failure, pendingCount, route.name, route.ready, taskState])
 
     const value = useMemo<RuntimeContextValue>(() => ({
         setRoute,
@@ -106,6 +103,11 @@ export function RuntimeStatusProvider({ children }:{ children:ReactNode }) {
             data-runtime-failure={failure ? JSON.stringify(failure) : undefined}
         >
             {children}
+            {failure && <aside className="runtime-failure" role="alert">
+                <strong>Asset failed to load.</strong>
+                <span>{failure.source}: {failure.message}</span>
+                <button type="button" onClick={() => window.location.reload()}>Reload</button>
+            </aside>}
         </div>
     </RuntimeContext.Provider>
 }

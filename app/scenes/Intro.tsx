@@ -1,21 +1,21 @@
-'use client'
-
-import Image from 'next/image'
-import { useCallback, useContext, useEffect } from "react"
-import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
-import { globalContext } from "../main"
+import { useCallback, useEffect } from "react"
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { useGameSession } from '../components/GameSession'
 import { toLang } from "../data/lang"
-import { createRuntimeAssetFailure } from '../logic/runtimeAssets'
+import { useRuntimeImage } from '../hooks/useRuntimeImage'
 
 export default function Index(){
-    const {setAfterBattleScene, setScene, lang} = useContext(globalContext)
-    const backgroundTask = useRuntimeTask('asset', '/assets/background/menubg.png')
+    const { navigate, lang } = useGameSession()
+    const {
+        imageRef:backgroundImageRef,
+        complete:completeBackgroundImage,
+        fail:failBackgroundImage,
+    } = useRuntimeImage('/assets/background/menubg.png', 'Intro background failed to decode.')
     useRuntimeRoute('intro')
 
     const continueToSelector = useCallback(() => {
-        setAfterBattleScene('Selector')
-        setScene('Selector')
-    }, [setAfterBattleScene, setScene])
+        navigate('Selector')
+    }, [navigate])
 
     useEffect(() => {
         const keydown = (event: KeyboardEvent) => {
@@ -28,14 +28,14 @@ export default function Index(){
     }, [continueToSelector])
 
     return <div className="Intro Intro-fallback">
-        <Image
+        <img
+            ref={backgroundImageRef}
             src="/assets/background/menubg.png"
             alt=""
-            fill={true}
-            priority={true}
-            sizes="100vw"
-            onLoad={backgroundTask.complete}
-            onError={() => backgroundTask.fail(createRuntimeAssetFailure('/assets/background/menubg.png', new Error('Intro background failed to decode.')))}
+            fetchPriority="high"
+            decoding="async"
+            onLoad={completeBackgroundImage}
+            onError={failBackgroundImage}
         />
         <div className="Intro-fallback-content">
             <p>The intro video is not included in this repository.</p>

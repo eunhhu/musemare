@@ -1,26 +1,23 @@
-'use client'
-
 import {
     useCallback,
-    useContext,
     useEffect,
     useEffectEvent,
     useRef,
     useState,
     type ChangeEvent,
-    type Dispatch,
-    type MutableRefObject,
-    type SetStateAction,
 } from "react"
 import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { gameConfig } from '../config/gameConfig'
 import type { Msprite, camera, env, exevent, map, mevent, player, text } from "../data/types"
-import { globalConfig, globalContext } from "../main"
-import { exRender, execute } from "../logic/exploreEngine"
+import { stepExploreSimulation } from '../logic/exploreDomain'
+import { ExploreRenderer } from '../renderers/ExploreRenderer'
 import { MsArrToRsArr } from "../data/utils"
 import { useFixedStepAnimation } from '../hooks/useFixedStepAnimation'
 import { useHeldKeys } from '../hooks/useHeldKeys'
+import { useSynchronizedState } from '../hooks/useSynchronizedState'
 import { useWindowSize } from "../hooks/useWindowSize"
-import { clientPointToWorld, normalizeDragRectangle } from '../logic/mapEditorDomain'
+import { clientPointToWorld, normalizeDragRectangle, updateEventTarget } from '../logic/mapEditorDomain'
+import { parseMapJson } from '../logic/contentValidation'
 
 const editorEnv:env = {keys:{
     playerLeft:'KeyA',
@@ -32,36 +29,23 @@ const editorEnv:env = {keys:{
     escape:'Escape',
 }}
 
-function useSynchronizedState<T>(initialValue:T):[T, Dispatch<SetStateAction<T>>, MutableRefObject<T>] {
-    const [value, setValueState] = useState(initialValue)
-    const valueRef = useRef(value)
-    const setValue = useCallback<Dispatch<SetStateAction<T>>>((nextValue) => {
-        const resolved = typeof nextValue === 'function'
-            ? (nextValue as (current:T) => T)(valueRef.current)
-            : nextValue
-        valueRef.current = resolved
-        setValueState(resolved)
-    }, [])
-    return [value, setValue, valueRef]
-}
-
 export default function Page(){
     const { width, height } = useWindowSize()
-    const {lang} = useContext(globalContext)
     const [focusing, setFocusing] = useState<number>(-1)
     const [evText, setEvText] = useState<string>('')
     const [sizing, setSizing] = useState<boolean>(false)
     const [isEventMapOpen, setIsEventMapOpen] = useState<boolean>(false)
     const [focusingEvent, setFocusingEvent] = useState<number>(-1)
+    const [importError, setImportError] = useState<string | null>(null)
 
     const [_activeEvents, setActiveEvents, activeEventsRef] = useSynchronizedState<exevent[]>([])
     const [sprites, setSprites, spritesRef] = useSynchronizedState<Msprite[]>([])
     const [texts, setTexts] = useState<text[]>([])
-    const [gravity, setGravity] = useState<number>(globalConfig['defaultGravity'])
-    const [ground, setGround] = useState<number>(globalConfig['defaultGround'])
-    const [player, setPlayer, playerRef] = useSynchronizedState<player>(globalConfig['defaultPlayer'])
-    const [camera, setCamera, cameraRef] = useSynchronizedState<camera>(globalConfig['defaultCamera'])
-    const [backgroundColor, setBackgroundColor] = useState<string>(globalConfig['black'])
+    const [gravity, setGravity] = useState<number>(gameConfig.defaultGravity)
+    const [ground, setGround] = useState<number>(gameConfig.defaultGround)
+    const [player, setPlayer, playerRef] = useSynchronizedState<player>(gameConfig.defaultPlayer)
+    const [camera, setCamera, cameraRef] = useSynchronizedState<camera>(gameConfig.defaultCamera)
+    const [backgroundColor, setBackgroundColor] = useState<string>(gameConfig.black)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const inputsRef = useHeldKeys()
     const interactionRef = useRef({
@@ -80,7 +64,7 @@ export default function Page(){
         let nextCamera = cameraRef.current
         let nextEvents = activeEventsRef.current
         for (let step = 0; step < steps; step += 1) {
-            const next = execute(lang, nextSprites, gravity, inputsRef.current, nextEvents, editorEnv, nextPlayer, nextCamera, ground)
+            const next = stepExploreSimulation(nextSprites, gravity, inputsRef.current, nextEvents, editorEnv, nextPlayer, nextCamera, ground)
             nextSprites = next[0]
             nextPlayer = next[1]
             nextCamera = next[2]
@@ -105,7 +89,7 @@ export default function Page(){
         resetCanvasInteraction(true)
 
         try {
-            const loadedMap = JSON.parse(await selectedFile.text()) as map
+            const loadedMap = parseMapJson(await selectedFile.text())
             setCamera(loadedMap.camera)
             setGravity(loadedMap.gravity)
             setPlayer(loadedMap.player)
@@ -115,8 +99,14 @@ export default function Page(){
             setGround(loadedMap.ground)
             setActiveEvents([])
             setFocusing(-1)
+            setFocusingEvent(-1)
+            setIsEventMapOpen(false)
+            setEvText('')
+            setSizing(false)
+            setImportError(null)
         } catch (error) {
-            console.error('Unable to open map JSON.', error)
+            console.warn('Unable to open map JSON.', error)
+            setImportError(error instanceof Error ? error.message : 'Unable to open map JSON.')
         }
     }
 
@@ -281,15 +271,29 @@ export default function Page(){
     }
 
     const createEventMap = (_v:mevent, _i:number) => {
+        const updateTarget = (rawTarget:string) => {
+            if (focusingEvent === -1) {
+                setPlayer(current => ({
+                    ...current,
+                    events:updateEventTarget(current.events, _i, rawTarget),
+                }))
+            } else {
+                setSprites(current => current.map((sprite, spriteIndex) => spriteIndex === focusingEvent
+                    ? { ...sprite, events:updateEventTarget(sprite.events, _i, rawTarget) }
+                    : sprite
+                ))
+            }
+        }
         return <details key={_i}>
             <summary>
                 <div>{_v.eventName}</div>
-                <input type="text" name="" id="" value={_v.target} onChange={e => e.target.value}/>
+                <input aria-label={`Event ${_i + 1} target`} type="text" value={_v.target} onChange={e => updateTarget(e.target.value)}/>
             </summary>
         </details>
     }
 
     return <div className="MapEditor">
+        {importError && <div className="import-error" role="alert">Map import rejected: {importError}</div>}
         <div>
             <div>
                 <button onClick={() => {openLevel()}}>Open Map</button>
@@ -334,7 +338,16 @@ export default function Page(){
                 </div>
             ))}
         </div>
-        {exRender([width*0.6, height], lang, MsArrToRsArr(sprites), texts, player, camera, backgroundColor, true, 'map-editor')}
+        <ExploreRenderer
+            stageSize={[width * 0.6, height]}
+            sprites={MsArrToRsArr(sprites)}
+            texts={texts}
+            player={player}
+            camera={camera}
+            backgroundColor={backgroundColor}
+            showHitbox={true}
+            surfaceLabel="map-editor"
+        />
         <div>
             {focusing == -1 ? <>
                 <div>
@@ -491,10 +504,10 @@ export default function Page(){
                 <button onClick={() => {setSizing(true)}}>{sizing ? "Sizing..." : "Set Size"}</button>
             </>}
         </div>
-        {isEventMapOpen && <div className="back" onMouseDown={() => setIsEventMapOpen(false)}></div>}
+        {isEventMapOpen && <button type="button" aria-label="Close event map" className="back" onMouseDown={() => setIsEventMapOpen(false)}></button>}
         {isEventMapOpen && <div className="eventmap">{
-            focusing == -1 ? player.events.map((_v, _i) => createEventMap(_v, _i)) :
-            sprites[focusingEvent].events.map((_v, _i) => createEventMap(_v, _i))
+            focusingEvent == -1 ? player.events.map((_v, _i) => createEventMap(_v, _i)) :
+            (sprites[focusingEvent]?.events ?? []).map((_v, _i) => createEventMap(_v, _i))
         }</div>}
         <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleMapFile} style={{display:'none'}} />
     </div>

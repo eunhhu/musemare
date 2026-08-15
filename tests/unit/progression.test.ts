@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { LevelCode } from '../../app/data/levelManifest'
-import { getEndingAccess, isProgressionStageAccessible } from '../../app/logic/progression'
+import {
+    getEndingAccess,
+    isProgressionStageAccessible,
+    markLevelCleared,
+    parseProgress,
+} from '../../app/logic/progression'
 
 const stages:LevelCode[][] = [['test'], ['moai'], ['dogbite'], ['test']]
 const freshProgress = [[-1, -1, -1], [-1, -1, -1], [-1, -1, -1], [-1, -1, -1]]
@@ -23,5 +28,23 @@ describe('availability-aware progression', () => {
 
         expect(isProgressionStageAccessible(stages, freshProgress, 1, isAvailable)).toBe(false)
         expect(getEndingAccess(stages, freshProgress, isAvailable)).toBe('locked')
+    })
+
+    it('repairs malformed saved progress to a stable shape', () => {
+        const parsed = parseProgress('[[null,2],"bad"]', stages)
+        expect(parsed.repaired).toBe(true)
+        expect(parsed.value).toEqual(freshProgress)
+    })
+
+    it('records a clear without mutating prior progress', () => {
+        const next = markLevelCleared(freshProgress, stages, [2, 0])
+        expect(next[2][0]).toBe(1)
+        expect(freshProgress[2][0]).toBe(-1)
+    })
+
+    it('uses the final configured level instead of a hard-coded third slot', () => {
+        const completed = markLevelCleared(freshProgress, stages, [0, 0])
+        const isAvailable = (code:LevelCode) => code === 'test'
+        expect(isProgressionStageAccessible(stages, completed, 1, isAvailable)).toBe(true)
     })
 })

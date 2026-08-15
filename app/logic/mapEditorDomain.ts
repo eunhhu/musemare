@@ -1,4 +1,4 @@
-import type { camera } from '../data/types'
+import type { camera, mevent } from '../data/types'
 
 export type DragPoint = [number, number]
 
@@ -75,4 +75,16 @@ export function clientPointToWorld(
         (point[1] - rectangle.top) * stageSize[1] / rectangle.height,
     ]
     return screenToWorld(screenPoint, stageSize, viewCamera)
+}
+
+export function updateEventTarget(events:mevent[], index:number, rawTarget:string):mevent[] {
+    return events.map((event, eventIndex) => {
+        if (eventIndex !== index) return event
+        const target = typeof event.target === 'number'
+            && rawTarget.trim() !== ''
+            && Number.isFinite(Number(rawTarget))
+            ? Number(rawTarget)
+            : rawTarget
+        return { ...event, target }
+    })
 }

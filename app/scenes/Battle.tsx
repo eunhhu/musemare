@@ -1,12 +1,13 @@
-'use client'
-
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useGameSession } from '../components/GameSession'
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { gameConfig } from '../config/gameConfig'
 import { levels } from '../data/level'
 import { levelManifest, type LevelCode } from '../data/levelManifest'
 import type { level } from '../data/types'
 import { lvlToRendata } from '../data/utils'
 import { useAnimationFrame } from '../hooks/useAnimationFrame'
+import { useRuntimeMedia } from '../hooks/useRuntimeMedia'
 import { useSceneFade } from '../hooks/useSceneFade'
 import { useWindowSize } from '../hooks/useWindowSize'
 import {
@@ -17,12 +18,17 @@ import {
     timelineStampFromAudio,
     type JudgementState,
 } from '../logic/battleDomain'
-import { battleEngine } from '../logic/battleEngine'
+import { BattleRenderer } from '../renderers/BattleRenderer'
 import { isEditableTarget } from '../logic/input'
-import { createRuntimeAssetFailure, mediaSourceMatches } from '../logic/runtimeAssets'
-import { globalContext } from '../main'
+import type { GameScene } from '../logic/gameSession'
+import {
+    markLevelCleared,
+    parseProgress,
+    progressStorageKey,
+    type BattleProgressTarget,
+} from '../logic/progression'
 
-const playKeys = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'BracketLeft', 'BracketRight', 'Backslash', 'Equal', 'Minus', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Space', 'ControlLeft', 'AltLeft', 'ControlRight', 'ContextMenu', 'AltRight', 'Enter', 'Backspace', 'Backquote', 'Tab', 'ShiftLeft', 'RightLeft', 'CapsLock', 'Numpad0', 'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4', 'Numpad5', 'Numpad6', 'Numpad7', 'Numpad8', 'Numpad9', 'NumpadDecimal', 'NumLock', 'NumpadEnter', 'NumpadSubtract', 'NumpadAdd', 'NumpadMultiply', 'NumpadDivide', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']
+const playKeys = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'BracketLeft', 'BracketRight', 'Backslash', 'Equal', 'Minus', 'Digit0', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Space', 'ControlLeft', 'AltLeft', 'ControlRight', 'ContextMenu', 'AltRight', 'Enter', 'Backspace', 'Backquote', 'Tab', 'ShiftLeft', 'ShiftRight', 'CapsLock', 'Numpad0', 'Numpad1', 'Numpad2', 'Numpad3', 'Numpad4', 'Numpad5', 'Numpad6', 'Numpad7', 'Numpad8', 'Numpad9', 'NumpadDecimal', 'NumLock', 'NumpadEnter', 'NumpadSubtract', 'NumpadAdd', 'NumpadMultiply', 'NumpadDivide', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']
 
 function UnavailableBattle({ code, onBack }:{ code:LevelCode, onBack:() => void }) {
     const manifest = levelManifest[code]
@@ -37,17 +43,26 @@ function UnavailableBattle({ code, onBack }:{ code:LevelCode, onBack:() => void 
 
 function PlayableBattle({
     levelData,
+    masterVolume,
+    progressTarget,
     afterBattleScene,
     setScene,
 }:{
     levelData:level
-    afterBattleScene:string
-    setScene:(scene:string) => void
+    masterVolume:number
+    progressTarget:BattleProgressTarget | null
+    afterBattleScene:GameScene
+    setScene:(scene:GameScene) => void
 }) {
     const { width, height } = useWindowSize()
     const [timeline, setTimeline] = useState(0)
     const [audioPlaying, setAudioPlaying] = useState(false)
-    const audioRef = useRef<HTMLAudioElement>(null)
+    const {
+        mediaRef:audioRef,
+        elementRef:audioElementRef,
+        complete:completeAudio,
+        fail:failAudio,
+    } = useRuntimeMedia<HTMLAudioElement>(levelData.song, 'Battle audio failed to decode.')
     const pendingHitsRef = useRef<number[]>([])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
@@ -55,7 +70,6 @@ function PlayableBattle({
     const renderData = useMemo(() => lvlToRendata(levelData), [levelData])
     const preparedNotes = useMemo(() => prepareNotes(renderData.objs), [renderData])
     const { style, transitionTo } = useSceneFade(setScene)
-    const audioTask = useRuntimeTask('asset', levelData.song)
     useRuntimeRoute('battle')
 
     useAnimationFrame(() => {
@@ -78,6 +92,14 @@ function PlayableBattle({
 
         if (!endingRef.current && currentTimeline >= levelData.endpoint) {
             endingRef.current = true
+            if (progressTarget) {
+                try {
+                    const current = parseProgress(localStorage.getItem(progressStorageKey), gameConfig.levelList).value
+                    localStorage.setItem(progressStorageKey, JSON.stringify(markLevelCleared(current, gameConfig.levelList, progressTarget)))
+                } catch (error) {
+                    console.error('Unable to save level progress.', error)
+                }
+            }
             transitionTo(afterBattleScene)
         }
     })
@@ -91,42 +113,54 @@ function PlayableBattle({
         }
         document.addEventListener('keydown', keydown)
         return () => document.removeEventListener('keydown', keydown)
-    }, [levelData.offset])
+    }, [audioRef, levelData.offset])
+
+    useEffect(() => {
+        if (audioRef.current) audioRef.current.volume = Math.min(1, Math.max(0, levelData.volume / 100 * masterVolume))
+    }, [audioRef, levelData.volume, masterVolume])
 
     return <div style={style} className="Battle">
         <audio
-            ref={audioRef}
+            ref={audioElementRef}
             src={levelData.song}
             autoPlay={true}
             preload="auto"
             onLoadedMetadata={event => {
-                event.currentTarget.volume = levelData.volume / 100
+                event.currentTarget.volume = Math.min(1, Math.max(0, levelData.volume / 100 * masterVolume))
                 event.currentTarget.currentTime = Math.max(levelData.offset, 0)
             }}
-            onCanPlayThrough={event => {
-                if (mediaSourceMatches(event.currentTarget.currentSrc, levelData.song, window.location.href)) audioTask.complete()
-            }}
+            onCanPlayThrough={event => completeAudio(event.currentTarget)}
             onPlaying={() => setAudioPlaying(true)}
             onPause={() => setAudioPlaying(false)}
             onWaiting={() => setAudioPlaying(false)}
             onEnded={() => setAudioPlaying(false)}
-            onError={event => {
-                if (!mediaSourceMatches(event.currentTarget.currentSrc, levelData.song, window.location.href)) return
-                audioTask.fail(createRuntimeAssetFailure(levelData.song, new Error('Battle audio failed to decode.')))
-            }}
+            onError={event => failAudio(event.currentTarget)}
         />
-        {battleEngine(timeline, [width, height], renderData, judgements, audioPlaying, 'battle')}
+        <BattleRenderer
+            timeline={timeline}
+            stageSize={[width, height]}
+            renderData={renderData}
+            judgements={judgements}
+            playing={audioPlaying}
+            surfaceLabel="battle"
+        />
     </div>
 }
 
 export default function Index(){
-    const { setScene, battleCode, afterBattleScene } = useContext(globalContext)
+    const { navigate, battleCode, afterBattleScene, battleProgressTarget, env } = useGameSession()
     const code = Object.hasOwn(levels, battleCode) ? battleCode as LevelCode : 'test'
     const manifest = levelManifest[code]
 
     if (manifest.availability === 'unavailable') {
-        return <UnavailableBattle code={code} onBack={() => setScene('Selector')} />
+        return <UnavailableBattle code={code} onBack={() => navigate('Selector')} />
     }
 
-    return <PlayableBattle levelData={levels[code]} afterBattleScene={afterBattleScene} setScene={setScene} />
+    return <PlayableBattle
+        levelData={levels[code]}
+        masterVolume={env.volume}
+        progressTarget={battleProgressTarget}
+        afterBattleScene={afterBattleScene}
+        setScene={navigate}
+    />
 }

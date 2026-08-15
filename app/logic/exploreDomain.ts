@@ -1,5 +1,17 @@
 import type { Msprite, camera, env, exevent, player } from '../data/types'
-import { initCollidedPosition, playerToMsprite } from '../data/utils'
+import { getSpriteHitboxBounds, initCollidedPosition, playerToMsprite } from '../data/utils'
+
+function clampActorToGround<T extends Msprite>(actor:T, ground:number):T {
+    const bounds = getSpriteHitboxBounds(actor)
+    if (actor.dposition[1] >= 0 && bounds.bottom >= ground) {
+        actor.position[1] -= bounds.bottom - ground
+        actor.dposition[1] = 0
+        actor.isGround = true
+    } else if (Math.abs(bounds.bottom - ground) <= 0.5 && actor.dposition[1] >= 0) {
+        actor.isGround = true
+    }
+    return actor
+}
 
 export function stepExploreSimulation(
     sprites:Msprite[],
@@ -24,13 +36,11 @@ export function stepExploreSimulation(
     const nextCamera:camera = { ...cameraState, position:[...cameraState.position] }
     const nextEvents:exevent[] = activeEvents.map(event => ({ ...event }))
 
+    nextPlayer.isSneak = inputs.includes(controls.keys.playerSneak)
+    nextPlayer.isRun = inputs.includes(controls.keys.playerRun)
+
     if(!nextPlayer.isGround){
         nextPlayer.dposition[1] += gravity
-    }
-    if(!nextPlayer.isGround && nextPlayer.position[1] + nextPlayer.anchor[1] * nextPlayer.height >= ground){
-        nextPlayer.dposition[1] = 0
-        nextPlayer.position[1] = ground - nextPlayer.anchor[1] * nextPlayer.height
-        nextPlayer.isGround = true
     }
     if(inputs.includes(controls.keys.playerJump) && nextPlayer.isGround){
         nextPlayer.dposition[1] = -10
@@ -38,12 +48,10 @@ export function stepExploreSimulation(
     }
 
     const move = nextPlayer.isRun ? 5 : 3
-    nextPlayer.isSneak = inputs.includes(controls.keys.playerSneak)
-    nextPlayer.isRun = inputs.includes(controls.keys.playerRun)
     nextPlayer.dposition[0] = inputs.includes(controls.keys.playerLeft) ? -move :
         inputs.includes(controls.keys.playerRight) ? move : 0
 
-    const movedPlayer = initCollidedPosition(playerToMsprite(nextPlayer), nextSprites)
+    const movedPlayer = clampActorToGround(initCollidedPosition(playerToMsprite(nextPlayer), nextSprites), ground)
     nextPlayer.position = [...movedPlayer.position]
     nextPlayer.dposition = [...movedPlayer.dposition]
     nextPlayer.isGround = movedPlayer.isGround
@@ -51,15 +59,11 @@ export function stepExploreSimulation(
     nextSprites.forEach((sprite, spriteIndex) => {
         if(sprite.isGravity){
             if(!sprite.isGround) sprite.dposition[1] += gravity
-            if(!sprite.isGround && sprite.position[1] + sprite.anchor[1] * sprite.height >= ground){
-                sprite.dposition[1] = 0
-                sprite.position[1] = ground - sprite.anchor[1] * sprite.height
-                sprite.isGround = true
-            }
         }
         const collisionPeers = nextSprites.filter((_, index) => index !== spriteIndex)
         collisionPeers.push(playerToMsprite(nextPlayer))
-        nextSprites[spriteIndex] = initCollidedPosition(sprite, collisionPeers)
+        const movedSprite = initCollidedPosition(sprite, collisionPeers)
+        nextSprites[spriteIndex] = sprite.isGravity ? clampActorToGround(movedSprite, ground) : movedSprite
     })
 
     const actors = [...nextSprites, playerToMsprite(nextPlayer)]

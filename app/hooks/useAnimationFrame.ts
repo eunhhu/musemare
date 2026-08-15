@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect, useRef } from 'react'
 
 export function useAnimationFrame(callback: (timestamp: number) => void, enabled = true) {

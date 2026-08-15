@@ -1,4 +1,5 @@
 import type { env } from '../data/types'
+import { normalizeLanguage } from '../data/lang'
 
 export type PersistedEnv = env & {
     language:string
@@ -25,7 +26,7 @@ function isRecord(value:unknown):value is Record<string, unknown> {
 }
 
 function isCompatibleLanguage(value:unknown):value is string {
-    return typeof value === 'string' && /^(?:en|ko)(?:-[A-Za-z0-9]+)?$/.test(value)
+    return typeof value === 'string' && /^(?:en|ko)(?:-[A-Za-z0-9]+)?$/i.test(value)
 }
 
 export function isPersistedEnv(value:unknown):value is PersistedEnv {
@@ -49,4 +50,8 @@ export function parsePersistedEnv(serialized:string | null, fallback:PersistedEn
     }
     if (isPersistedEnv(parsed)) return { value:parsed, repaired:false }
     return { value:fallback, repaired:true }
+}
+
+export function envForBrowserLanguage(fallback:PersistedEnv, browserLanguage:string | null | undefined):PersistedEnv {
+    return { ...fallback, language:normalizeLanguage(browserLanguage) }
 }

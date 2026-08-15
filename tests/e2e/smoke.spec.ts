@@ -118,6 +118,48 @@ test('malformed persisted environment is repaired before the main menu becomes r
     await expectHealthy(page, failures)
 })
 
+test('unsupported browser locale falls back to English without blank menu labels', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.addInitScript(() => {
+        localStorage.clear()
+        Object.defineProperty(navigator, 'language', { configurable:true, get:() => 'fr-FR' })
+    })
+    await page.goto('/', { waitUntil:'domcontentloaded' })
+
+    await expectRuntimeReady(page, 'main-menu')
+    await expect(page.getByRole('button', { name:'New Game' })).toBeVisible()
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('env')!).language)).toBe('en-US')
+    await expectHealthy(page, failures)
+})
+
+test('settings persist language, master volume, and key bindings', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.addInitScript(() => localStorage.clear())
+    await page.goto('/', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'main-menu')
+
+    await page.getByRole('button', { name:'Settings' }).click()
+    await expectRuntimeReady(page, 'settings')
+    await page.getByLabel('Language').selectOption('ko-KR')
+    await page.getByRole('button', { name:'오디오' }).click()
+    await page.getByLabel('전체 음량').fill('0.25')
+    await page.getByRole('button', { name:'조작키' }).click()
+    const moveLeft = page.getByLabel('Move left')
+    await moveLeft.focus()
+    await page.keyboard.press('ArrowLeft')
+    await expect(moveLeft).toHaveValue('ArrowLeft')
+
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('env')!))).toMatchObject({
+        language:'ko-KR',
+        volume:0.25,
+        keys:{ playerLeft:'ArrowLeft' },
+    })
+    await page.getByRole('button', { name:'뒤로가기' }).click()
+    await expectRuntimeReady(page, 'main-menu')
+    await expect(page.getByRole('button', { name:'새 게임' })).toBeVisible()
+    await expectHealthy(page, failures)
+})
+
 test('New Game intro fallback stays onscreen and continues to unavailable selector entry', async ({ page }) => {
     const failures = await observeRuntimeFailures(page)
     await page.goto('/', { waitUntil:'domcontentloaded' })
@@ -172,6 +214,22 @@ test('fresh storage reaches the honestly exposed playable ending through visible
     await expectHealthy(page, failures)
 })
 
+test('battle audio applies the persisted master volume', async ({ page }) => {
+    const failures = await observeRuntimeFailures(page)
+    await page.addInitScript(() => localStorage.setItem('env', JSON.stringify({
+        keys:{
+            playerLeft:'KeyA', playerRight:'KeyD', playerJump:'Space', playerRun:'ShiftLeft',
+            playerSneak:'ControlLeft', interaction:'KeyF', escape:'Escape',
+        },
+        language:'en-US',
+        volume:0.2,
+    })))
+    await page.goto('/?scene=Battle&battle=ending', { waitUntil:'domcontentloaded' })
+    await expectRuntimeReady(page, 'battle')
+    await expect.poll(() => page.locator('audio').evaluate(element => (element as HTMLAudioElement).volume)).toBeCloseTo(0.2, 3)
+    await expectHealthy(page, failures)
+})
+
 for (const scene of [
     { query:'/?scene=Battle&battle=ending', runtime:'battle', background:'#000000' },
     { query:'/?scene=Explore&explore=preview', runtime:'explore', background:'#000000' },
@@ -202,6 +260,31 @@ test('battle editor resizes its renderer and applies background changes', async 
     await expectBackingDimensions(canvas)
     await expectHealthy(page, failures)
 })
+
+for (const invalidImport of [
+    { path:'/editor', runtime:'battle-editor', message:/Level import rejected/ },
+    { path:'/mapeditor', runtime:'map-editor', message:/Map import rejected/ },
+] as const) {
+    test(`${invalidImport.path} rejects incomplete JSON without corrupting live state`, async ({ page }) => {
+        const failures = await observeRuntimeFailures(page)
+        await page.goto(invalidImport.path, { waitUntil:'domcontentloaded' })
+        await expectRuntimeReady(page, invalidImport.runtime)
+        await page.locator('input[type="file"]').setInputFiles({
+            name:'invalid.json',
+            mimeType:'application/json',
+            buffer:Buffer.from('{}'),
+        })
+
+        await expect(page.locator('.import-error')).toContainText(invalidImport.message)
+        await expectRuntimeReady(page, invalidImport.runtime)
+        if (invalidImport.path === '/editor') {
+            await expect(page.locator('canvas').first()).toHaveAttribute('data-pixi-background', '#000000')
+        } else {
+            await expect(page.getByLabel('Camera position X')).toHaveValue('0')
+        }
+        await expectHealthy(page, failures)
+    })
+}
 
 test('map editor drag transforms stay in world space under a rotated scaled camera', async ({ page }) => {
     const failures = await observeRuntimeFailures(page)
@@ -375,9 +458,11 @@ test('editor runtime recovers after broken sprite and audio sources are replaced
     await importLevel('broken-level.json', level('/assets/song/missing-editor-audio.mp3', '/assets/object/missing-editor-sprite.png'))
     await expect(runtime).toHaveAttribute('data-app-state', 'failed')
     await expect(runtime).toHaveAttribute('data-runtime-failure', /missing-editor-(audio|sprite)/)
+    await expect(page.locator('.runtime-failure')).toBeVisible()
 
     await importLevel('valid-level.json', level('/assets/song/icyxis_true_ending.mp3', '/assets/object/white.png'))
     await expectRuntimeReady(page, 'battle-editor')
+    await expect(page.locator('.runtime-failure')).toHaveCount(0)
     await expect(runtime).not.toHaveAttribute('data-runtime-failure')
     await expect(runtime).toHaveAttribute('data-runtime-pending', '0')
     await expect.poll(() => page.locator('[data-testid="editor-audio"]').evaluate(element => {

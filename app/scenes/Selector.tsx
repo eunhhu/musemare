@@ -1,39 +1,37 @@
-'use client'
-
-import { useContext, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { useGameSession } from '../components/GameSession'
 import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { gameConfig } from '../config/gameConfig'
 import { isLevelAvailable, levelManifest } from '../data/levelManifest'
-import { globalContext, globalConfig } from "../main"
 import { toLang } from "../data/lang"
 import { useAnimationFrame } from "../hooks/useAnimationFrame"
 import { useSceneFade } from "../hooks/useSceneFade"
-import { getEndingAccess, isProgressionStageAccessible } from '../logic/progression'
-
-const defaultLevelList = [[-1,-1,-1],[-1,-1,-1],[-1,-1,-1],[-1,-1,-1]]
+import {
+    createDefaultProgress,
+    getEndingAccess,
+    isProgressionStageAccessible,
+    parseProgress,
+    progressStorageKey,
+} from '../logic/progression'
 
 export default function Index(){
-    const {lang, setScene, setBattleCode, setAfterBattleScene} = useContext(globalContext)
+    const { lang, navigate, prepareBattle } = useGameSession()
     const [selected, setSelected] = useState<string>('')
-    const [levelList, setLevelList] = useState<number[][]>(defaultLevelList)
+    const [levelList, setLevelList] = useState<number[][]>(() => createDefaultProgress(gameConfig.levelList))
     const [rainbowColor, setRainbowColor] = useState<string>('#000000')
     const lastRainbowUpdate = useRef(0)
-    const { style, transitionTo } = useSceneFade(setScene)
-    const endingAccess = getEndingAccess(globalConfig.levelList, levelList, isLevelAvailable)
+    const { style, transitionTo } = useSceneFade(navigate)
+    const endingAccess = getEndingAccess(gameConfig.levelList, levelList, isLevelAvailable)
     useRuntimeRoute('selector')
 
     useEffect(() => {
-        const clearList = localStorage.getItem('clearLevelList')
-        if(clearList == null) {
-            localStorage.setItem('clearLevelList', JSON.stringify(defaultLevelList))
-            return
-        }
-
         try {
-            const parsed = JSON.parse(clearList)
-            if (Array.isArray(parsed)) setLevelList(parsed)
+            const parsed = parseProgress(localStorage.getItem(progressStorageKey), gameConfig.levelList)
+            setLevelList(parsed.value)
+            if (parsed.repaired) localStorage.setItem(progressStorageKey, JSON.stringify(parsed.value))
         } catch (error) {
             console.error('Unable to read level progress.', error)
-            localStorage.setItem('clearLevelList', JSON.stringify(defaultLevelList))
+            setLevelList(createDefaultProgress(gameConfig.levelList))
         }
     }, [])
 
@@ -48,18 +46,18 @@ export default function Index(){
     }, endingAccess === 'completed')
 
     return <div style={style} className="Selector fullscreen blackbg">
-        {!selected ? <>{globalConfig.mapList.map((v, i) => (
-            <div className={!isProgressionStageAccessible(globalConfig.levelList, levelList, i, isLevelAvailable) ? 'disabled' : ''} key={i} onClick={() => {
-                if(!isProgressionStageAccessible(globalConfig.levelList, levelList, i, isLevelAvailable)) return
+        {!selected ? <>{gameConfig.mapList.map((v, i) => (
+            <button type="button" className={!isProgressionStageAccessible(gameConfig.levelList, levelList, i, isLevelAvailable) ? 'disabled' : ''} key={i} onClick={() => {
+                if(!isProgressionStageAccessible(gameConfig.levelList, levelList, i, isLevelAvailable)) return
                 setSelected(v)
-            }}>{toLang(lang, v)}</div>
+            }}>{toLang(lang, v)}</button>
         ))} {endingAccess !== 'locked' && <button type="button" style={endingAccess === 'completed' ? {borderColor:rainbowColor, color:rainbowColor} : undefined} onClick={() => {
-            setBattleCode('ending')
+            prepareBattle('ending')
             transitionTo('Battle')
-            setAfterBattleScene('Selector')
         }}>{endingAccess === 'prerequisites-unavailable' ? 'Play Ending — prerequisites unavailable' : toLang(lang, 'ending')}</button>}
         {endingAccess === 'prerequisites-unavailable' && <div className="availability-note">The prerequisite recordings are unavailable, so the existing ending is offered as a standalone playable level. No unavailable prerequisite is marked complete.</div>}</>:
-        <>{globalConfig.levelList[globalConfig.mapList.indexOf(selected)].map((v, i) => {
+        <>{gameConfig.levelList[gameConfig.mapList.indexOf(selected)].map((v, i) => {
+            const stageIndex = gameConfig.mapList.indexOf(selected)
             const manifest = levelManifest[v]
             const unavailable = manifest.availability === 'unavailable'
             const label = unavailable
@@ -72,14 +70,13 @@ export default function Index(){
                 className={unavailable ? 'disabled' : ''}
                 onClick={() => {
                     if (unavailable) return
-                    setBattleCode(v)
+                    prepareBattle(v, [stageIndex, i])
                     transitionTo('Battle')
-                    setAfterBattleScene('Selector')
                 }}
             >{label}</button>
         })}
         <div className="availability-note">Unavailable levels keep their original chart and track identity, but cannot start without the matching recording.</div>
-        <div onClick={() => setSelected('')}>{toLang(lang, 'goback')}</div></>}
-        <div className="goback" onClick={() => transitionTo('MainMenu')}>{toLang(lang, 'goback')}</div>
+        <button type="button" onClick={() => setSelected('')}>{toLang(lang, 'goback')}</button></>}
+        <button type="button" className="goback" onClick={() => transitionTo('MainMenu')}>{toLang(lang, 'goback')}</button>
     </div>
 }

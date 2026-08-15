@@ -1,10 +1,8 @@
-'use client'
-
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ChangeEvent } from "react"
-import { useRuntimeRoute, useRuntimeTask } from '../components/RuntimeStatus'
-import { enableFilters, isInRange, strengthFilters } from "../data/utils"
+import { useRuntimeRoute } from '../components/RuntimeStatus'
+import { enableFilters, strengthFilters } from "../data/utils"
 import { obj, event, level, objEvent, eventProps, objEventProps, filter, filterType, eventValue } from "../data/types"
-import { battleEngine } from "../logic/battleEngine"
+import { BattleRenderer } from '../renderers/BattleRenderer'
 import {
     enqueuePendingHit,
     evaluateJudgements,
@@ -15,16 +13,17 @@ import {
 } from "../logic/battleDomain"
 import { clearEditorSeekEpoch, pauseAudioForLevelImport, seekAudioToLevelStart } from '../logic/editorAudio'
 import { isEditableTarget } from '../logic/input'
-import { createRuntimeAssetFailure, mediaSourceMatches } from '../logic/runtimeAssets'
 import { audioTimeToTimeline, buildGridLines, clampTimeline } from "../logic/timing"
 import { useAnimationFrame } from "../hooks/useAnimationFrame"
-
-// ui 조절 드래그 범위
-const dragRange = 6
+import { useRuntimeMedia } from '../hooks/useRuntimeMedia'
+import { parseLevelJson } from '../logic/contentValidation'
+import { clamp, timelineScrollMetrics } from '../logic/editorLayout'
+import { useEditorLayout } from './useEditorLayout'
 
 type ObjectEditorValue = string | number | boolean | [0|1, number]
 type EventEditorValue = event[eventProps]
 type ObjectEventEditorValue = objEvent[objEventProps]
+type EventClipboard = { scope:'main', value:event } | { scope:'object', value:objEvent }
 
 function inputEventValue(value:eventValue | undefined):string | number {
     return typeof value === 'string' || typeof value === 'number' ? value : ''
@@ -51,15 +50,21 @@ function insertByStamp<T extends { stamp:number }>(items:T[], item:T) {
 }
 
 export default function Page(){
-    // ui settings
-    const [underbarLine, setUnderbarLine] = useState<number>(30)
-    const [mainsetLine, setMainsetLine] = useState<number>(20)
-    const [eventsetLine, setEventsetLine] = useState<number>(20)
-    const [objLine, setObjLine] = useState<number>(20)
-    const [condset, setCondset] = useState<number[]>([0, 0])
+    const {
+        underbarLine,
+        mainsetLine,
+        eventsetLine,
+        objLine,
+        viewportSize:condset,
+        stageSize,
+        zoom,
+        zoomRef,
+        layoutRef,
+        resetZoom,
+    } = useEditorLayout()
     const [rowScroll, setRowScroll] = useState<number>(0)
     const [colScroll, setColScroll] = useState<number>(0)
-    const [stageSize, setStageSize] = useState<[number, number]>([0, 0])
+    const [importError, setImportError] = useState<string | null>(null)
 
     // default settings
     const [bpm, setBpm] = useState<number>(100)
@@ -80,7 +85,6 @@ export default function Page(){
     const [gridOffset, setGridOffset] = useState<number>(0)
     const [chartOffset, setChartOffset] = useState<number>(0)
     const [playing, setPlaying] = useState<boolean>(false)
-    const [zoom, setZoom] = useState<number>(100)
     const [timeline, setTimeline] = useState<number>(0)
     const gridLine = useMemo(() => buildGridLines({ bpm, divisions:grid, endpoint, offset:gridOffset }), [bpm, endpoint, grid, gridOffset])
     const [sel, setSel] = useState<'chart'|'sprite'>('chart')
@@ -88,28 +92,22 @@ export default function Page(){
     const [focusNote, setFocusNote] = useState<[number, number]>([-1, 0]) // obj's idx, index
     const [focusObj, setFocusObj] = useState<number>(0)
     const [focusing, setFocusing] = useState<number>(0) // 0 = obj, 1 = event, 2 = note
-    const [evClipboard, setEvClipboard] = useState<event|objEvent>()
-    const audioRef = useRef<HTMLAudioElement>(null)
+    const [evClipboard, setEvClipboard] = useState<EventClipboard>()
+    const {
+        mediaRef:audioRef,
+        elementRef:audioElementRef,
+        complete:completeAudio,
+        fail:failAudio,
+    } = useRuntimeMedia<HTMLAudioElement>(song, 'Editor audio failed to decode.', Boolean(song))
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const zoomRef = useRef(100)
     const timelineRef = useRef(0)
     const pendingHitsRef = useRef<number[]>([])
     const judgementsRef = useRef<JudgementState>({})
     const [judgements, setJudgements] = useState<JudgementState>({})
     const sourceEpochRef = useRef(0)
-    const audioTask = useRuntimeTask('asset', song, Boolean(song))
     const clearSeekEpoch = useCallback(() => {
         clearEditorSeekEpoch(pendingHitsRef, judgementsRef, setJudgements)
     }, [])
-    const layoutRef = useRef({
-        underbar: 30,
-        mainset: 20,
-        eventset: 20,
-        objects: 20,
-        dragging: '',
-        controlsDragging: false,
-        scrollbarDragging: false,
-    })
     const renderData = useMemo(() => ({
         events,
         objs,
@@ -122,103 +120,6 @@ export default function Page(){
     const preparedNotes = useMemo(() => prepareNotes(objs), [objs])
     useRuntimeRoute('battle-editor')
     
-    useEffect(() => {
-        setCondset([innerWidth, innerHeight])
-        const layout = layoutRef.current
-        
-        function resizeCanvas(){
-            setCondset([innerWidth, innerHeight])
-            setStageSize([
-                innerWidth / 100 * (100 - layout.mainset - layout.eventset),
-                innerHeight / 100 * (100 - layout.underbar),
-            ])
-        }
-        window.addEventListener('resize', resizeCanvas)
-        resizeCanvas()
-
-        function keydown(e:KeyboardEvent){
-            if(e.altKey && !isEditableTarget(e.target)){
-                e.preventDefault()
-            }
-        }
-        function mouseup(){
-            layout.dragging = ''
-        }
-        function mousedown(e:MouseEvent){
-            if(isInRange(e.clientY, dragRange, innerHeight / 100 * (100-layout.underbar))){
-                layout.dragging = 'underbar'
-            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.mainset) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
-                layout.dragging = 'mainset'
-            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (100-layout.eventset)) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
-                layout.dragging = 'eventset'
-            } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.objects) && e.clientY > (innerHeight / 100 * (100-layout.underbar))){
-                layout.dragging = 'objs'
-            }
-        }
-        function mousemove(e:MouseEvent){
-            if(layout.dragging){
-                switch(layout.dragging){
-                    case 'underbar':
-                        layout.underbar = 100 - (100 * e.clientY / innerHeight)
-                        setUnderbarLine(layout.underbar)
-                        break;
-                    case 'mainset':
-                        layout.mainset = (100 * e.clientX / innerWidth)
-                        setMainsetLine(layout.mainset)
-                        break;
-                    case 'eventset':
-                        layout.eventset = 100 - (100 * e.clientX / innerWidth)
-                        setEventsetLine(layout.eventset)
-                        break;
-                    case 'objs':
-                        layout.objects = (100 * e.clientX / innerWidth)
-                        setObjLine(layout.objects)
-                        break;
-                }
-                resizeCanvas()
-            } else {
-                if(isInRange(e.clientY, dragRange, innerHeight / 100 * (100-layout.underbar))){
-                    document.body.style.cursor = 'n-resize'
-                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.mainset) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
-                    document.body.style.cursor = 'e-resize'
-                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * (100-layout.eventset)) && e.clientY < (innerHeight / 100 * (100-layout.underbar))){
-                    document.body.style.cursor = 'e-resize'
-                } else if(isInRange(e.clientX, dragRange, innerWidth / 100 * layout.objects) && e.clientY > (innerHeight / 100 * (100-layout.underbar))){
-                    document.body.style.cursor = 'e-resize'
-                } else {
-                    document.body.style.cursor = 'unset'
-                }
-            }
-        }
-        
-        function wheel(e:WheelEvent){
-            if(e.altKey){
-                zoomRef.current -= (zoomRef.current/8)*(e.deltaY / 100)
-                zoomRef.current = Math.max(zoomRef.current, 1)
-                setZoom(zoomRef.current)
-            }
-        }
-        const contextmenu = (e:Event) => {
-            e.preventDefault()
-        }
-        
-        document.addEventListener('wheel', wheel)
-        document.addEventListener('contextmenu', contextmenu)
-        document.addEventListener('mousemove', mousemove)
-        document.addEventListener('mousedown', mousedown)
-        document.addEventListener('mouseup', mouseup)
-        document.addEventListener('keydown', keydown)
-        return () => {
-            window.removeEventListener('resize', resizeCanvas)
-            document.removeEventListener('wheel', wheel)
-            document.removeEventListener('contextmenu', contextmenu)
-            document.removeEventListener('mousemove', mousemove)
-            document.removeEventListener('mousedown', mousedown)
-            document.removeEventListener('mouseup', mouseup)
-            document.removeEventListener('keydown', keydown)
-            document.body.style.cursor = 'unset'
-        }
-    }, [])
     
     // new 눌렀을때 리셋
     const reset = () => {
@@ -231,8 +132,7 @@ export default function Page(){
         setVolume(100)
         setEndpoint(90)
         setPlaying(false)
-        zoomRef.current = 100
-        setZoom(100)
+        resetZoom()
         setRowScroll(0)
         setColScroll(0)
         timelineRef.current = 0
@@ -245,6 +145,7 @@ export default function Page(){
         setFocusing(0)
         setFocusNote([-1, 0])
         setFocusObj(0)
+        setImportError(null)
         v_setTimeline(0)
     }
 
@@ -258,12 +159,11 @@ export default function Page(){
     const handleLevelFile = async (change:ChangeEvent<HTMLInputElement>) => {
         const selectedFile = change.target.files?.[0]
         if (!selectedFile) return
-        pauseAudioForLevelImport(audioRef.current)
-        setPlaying(false)
-        clearSeekEpoch()
-
         try {
-            const loadedLevel = JSON.parse(await selectedFile.text()) as level
+            const loadedLevel = parseLevelJson(await selectedFile.text())
+            pauseAudioForLevelImport(audioRef.current)
+            setPlaying(false)
+            clearSeekEpoch()
             setBpm(loadedLevel.bpm)
             setOffset(loadedLevel.offset)
             setSong(loadedLevel.song)
@@ -276,10 +176,19 @@ export default function Page(){
             setRotate(loadedLevel.rotate)
             setScale(loadedLevel.scale)
             setFilters(loadedLevel.filters ?? defaultFilters)
+            setFocusEvent([-1, 0])
+            setFocusing(0)
+            setFocusNote([-1, 0])
+            setFocusObj(0)
+            setEvClipboard(undefined)
+            setRowScroll(0)
+            setColScroll(0)
             timelineRef.current = 0
             setTimeline(0)
+            setImportError(null)
         } catch (error) {
-            console.error('Unable to open level JSON.', error)
+            console.warn('Unable to open level JSON.', error)
+            setImportError(error instanceof Error ? error.message : 'Unable to open level JSON.')
         }
     }
 
@@ -346,7 +255,7 @@ export default function Page(){
             audio.removeEventListener('loadedmetadata', seekToImportedOffset)
             if (sourceEpochRef.current === sourceEpoch) sourceEpochRef.current += 1
         }
-    }, [clearSeekEpoch, offset, song])
+    }, [audioRef, clearSeekEpoch, offset, song])
 
     useAnimationFrame(() => {
         const audio = audioRef.current
@@ -393,6 +302,25 @@ export default function Page(){
         v_setTimeline(nextTimeline)
     })
 
+    const scrollbarMouseMove = useEffectEvent((e:MouseEvent) => {
+        const layout = layoutRef.current
+        if (!layout.scrollbarDragging) return
+        const track = document.querySelector('.scrollbar-row') as HTMLDivElement | null
+        if (!track) return
+        const rect = track.getBoundingClientRect()
+        const metrics = timelineScrollMetrics(rect.width, zoomRef.current, rowScroll)
+        if (metrics.maxScroll === 0 || metrics.thumbTravel === 0) {
+            setRowScroll(0)
+            return
+        }
+        const thumbLeft = clamp(
+            e.clientX - rect.left - layout.scrollbarGrabOffset,
+            0,
+            metrics.thumbTravel,
+        )
+        setRowScroll(-(thumbLeft / metrics.thumbTravel) * metrics.maxScroll)
+    })
+
     const timelineKeyDown = useEffectEvent((e:KeyboardEvent) => {
         if (isEditableTarget(e.target)) return
 
@@ -427,7 +355,8 @@ export default function Page(){
         const scrollbarMouseDown = (e:MouseEvent) => {
             if(!layout.dragging){
                 layout.scrollbarDragging = true
-                timelineMouseMove(e)
+                layout.scrollbarGrabOffset = e.clientX - scrollbar!.getBoundingClientRect().left
+                scrollbarMouseMove(e)
             }
         }
 
@@ -435,20 +364,22 @@ export default function Page(){
         scrollbar?.addEventListener('mousedown', scrollbarMouseDown)
         document.addEventListener('mouseup', mouseup)
         document.addEventListener('mousemove', timelineMouseMove)
+        document.addEventListener('mousemove', scrollbarMouseMove)
         document.addEventListener('keydown', timelineKeyDown)
         return () => {
             controls?.removeEventListener('mousedown', controlsMouseDown)
             scrollbar?.removeEventListener('mousedown', scrollbarMouseDown)
             document.removeEventListener('mouseup', mouseup)
             document.removeEventListener('mousemove', timelineMouseMove)
+            document.removeEventListener('mousemove', scrollbarMouseMove)
             document.removeEventListener('keydown', timelineKeyDown)
         }
-    }, [])
+    }, [layoutRef])
 
     // state volume변경시 실제 오디오 볼륨을 변경하는 코드
     useEffect(() => {
         if (audioRef.current) audioRef.current.volume = volume/100
-    }, [volume])
+    }, [audioRef, volume])
 
     // 휠버튼으로 타임라인 이동하는 코드
     useEffect(() => {
@@ -456,14 +387,15 @@ export default function Page(){
         // 휠 이벤트
         function wheelev(e:WheelEvent){
             if(!e.altKey){
-                setRowScroll(current => Math.min(0, current-e.deltaY))
+                const viewport = innerWidth / 100 * (100 - layoutRef.current.objects)
+                setRowScroll(current => timelineScrollMetrics(viewport, zoomRef.current, current - e.deltaY).scroll)
             }
         }
         ev.addEventListener('wheel', wheelev)
         return () => {
             ev.removeEventListener('wheel', wheelev)
         }
-    }, [])
+    }, [layoutRef, zoomRef])
 
     // 휠버튼으로 오브젝트 스크롤 이동하는 코드
     useEffect(() => {
@@ -471,14 +403,23 @@ export default function Page(){
         // 휠 이벤트
         function wheelev(e:WheelEvent){
             if(!e.altKey){
-                setColScroll(current => Math.max(0, current+(e.deltaY/100)))
+                setColScroll(current => clamp(current + e.deltaY / 100, 0, objs.length))
             }
         }
         ob.addEventListener('wheel', wheelev)
         return () => {
             ob.removeEventListener('wheel', wheelev)
         }
-    }, [])
+    }, [objs.length])
+
+    useEffect(() => {
+        const viewport = condset[0] / 100 * (100 - objLine)
+        setRowScroll(current => timelineScrollMetrics(viewport, zoom, current).scroll)
+    }, [condset, objLine, zoom])
+
+    useEffect(() => {
+        setColScroll(current => clamp(current, 0, objs.length))
+    }, [objs.length])
 
     // 오브젝트 추가 함수
     const addObj = () => {
@@ -576,7 +517,8 @@ export default function Page(){
 
     // 메인 이벤트 설정 함수
     const setEv = (_i:number, _t:eventProps, _v:EventEditorValue):void => {
-        setEvents(current => current.map((currentEvent, index) => {
+        let changed:event | undefined
+        const nextEvents = events.map((currentEvent, index) => {
             if(index !== _i) return currentEvent
             const nextEvent:event = { ...currentEvent }
             if(_t == 'type'){
@@ -590,13 +532,18 @@ export default function Page(){
             }
             const numericValue = Number(_v)
             Object.assign(nextEvent, { [_t]:_t == 'value' || _t == 'speed' ? Number.isNaN(numericValue) ? _v : numericValue : _v })
+            changed = nextEvent
             return nextEvent
-        }))
+        })
+        if (_t === 'stamp') nextEvents.sort((first, second) => first.stamp - second.stamp)
+        setEvents(nextEvents)
+        if (_t === 'stamp' && changed) setFocusEvent([0, nextEvents.indexOf(changed)])
     }
 
     // 오브젝트 이벤트 설정 함수
     const setObjEv = (_oi:number, _i:number, _t:objEventProps, _v:ObjectEventEditorValue):void => {
-        setObjs(current => current.map((object, objectIndex) => {
+        let nextFocusIndex = _i
+        const nextObjects = objs.map((object, objectIndex) => {
             if(objectIndex !== _oi) return object
             const objectEvents = object.events.map((currentEvent, eventIndex) => {
                 if(eventIndex !== _i) return currentEvent
@@ -618,8 +565,15 @@ export default function Page(){
                 Object.assign(nextEvent, { [_t]:_v })
                 return nextEvent
             })
+            if (_t === 'stamp') {
+                const changed = objectEvents[_i]
+                objectEvents.sort((first, second) => first.stamp - second.stamp)
+                nextFocusIndex = objectEvents.indexOf(changed)
+            }
             return { ...object, events:objectEvents }
-        }))
+        })
+        setObjs(nextObjects)
+        if (_t === 'stamp') setFocusEvent([_oi + 1, nextFocusIndex])
     }
 
     // 오브젝트 인덱스 설정 함수
@@ -682,7 +636,9 @@ export default function Page(){
             // 이벤트 복사, 자르기, 붙여넣기 코드
             } else if((e.code == 'KeyC' || e.code == 'KeyX') && e.ctrlKey){ // 복사 & 자르기
                 if(focusEvent[0] != -1){
-                    const cb:event | objEvent = structuredClone(focusEvent[0] == 0 ? events[focusEvent[1]] : objs[focusEvent[0]-1].events[focusEvent[1]])
+                    const cb:EventClipboard = focusEvent[0] == 0
+                        ? { scope:'main', value:structuredClone(events[focusEvent[1]]) }
+                        : { scope:'object', value:structuredClone(objs[focusEvent[0]-1].events[focusEvent[1]]) }
                     if(e.code == 'KeyX') {
                         if (focusEvent[0] == 0) remEv(focusEvent[1])
                         else remObjEv(focusEvent[0]-1, focusEvent[1])
@@ -692,9 +648,8 @@ export default function Page(){
                 }
             } else if(e.code == 'KeyV' && e.ctrlKey){ // 붙여넣기
                 if(evClipboard){
-                    const isCbMainEv:boolean = (evClipboard as event).speed != undefined
-                    if (focusObj == 0 && isCbMainEv) addEv(evClipboard as event)
-                    else if (focusObj > 0 && !isCbMainEv) addObjEv(focusObj-1, evClipboard as objEvent)
+                    if (focusObj == 0 && evClipboard.scope === 'main') addEv(evClipboard.value)
+                    else if (focusObj > 0 && evClipboard.scope === 'object') addObjEv(focusObj-1, evClipboard.value)
                 }
             } else if(e.code == 'KeyW'){ // 선택된 차트에 노트 추가
                 if(focusObj > 0 && objs[focusObj-1].type == 'chart'){
@@ -737,7 +692,7 @@ export default function Page(){
                 document.removeEventListener('keydown', keydown)
             }
         }
-    }, [offset, playing])
+    }, [audioRef, offset, playing])
     useEffect(() => {
         if(!playing) {
             clearSeekEpoch()
@@ -793,8 +748,11 @@ export default function Page(){
         </>
     }
 
+    const scrollbar = timelineScrollMetrics(condset[0] / 100 * (100 - objLine), zoom, rowScroll)
+
     // html 코드
     return <div className="Editor">
+        {importError && <div className="import-error" role="alert">Level import rejected: {importError}</div>}
         <div style={{height:`${100-underbarLine}%`}} className="workspace">
             <div style={{width:`${mainsetLine}%`}} className="mainset">
                 <div>
@@ -867,7 +825,14 @@ export default function Page(){
                 }
             </div>
             <div style={{width:`${100-mainsetLine-eventsetLine}%`}} className="scene">
-                {battleEngine(timeline, stageSize, renderData, judgements, playing, 'battle-editor')}
+                <BattleRenderer
+                    timeline={timeline}
+                    stageSize={stageSize}
+                    renderData={renderData}
+                    judgements={judgements}
+                    playing={playing}
+                    surfaceLabel="battle-editor"
+                />
             </div>
             <div style={{width:`${eventsetLine}%`}} className="eventset">
                 {focusEvent[0] == 0 ? <>
@@ -1018,28 +983,22 @@ export default function Page(){
                     ))}
                 </div>
                 <div className="scrollbar-row" style={{width:`${100-objLine}%`}}><div
-                style={{width:`${(condset[0] /100 * (100-objLine)) /(zoom/100)}px`,
-                marginLeft:`${((condset[0] /100 * (100-objLine))-(condset[0] /100 * (100-objLine)/(zoom/100)))*(-rowScroll)/((condset[0] /100 * (100-objLine)) * (zoom/100) - (condset[0] /100 * (100-objLine)))}px`}}></div></div>
+                style={{width:`${scrollbar.thumbWidth}px`, marginLeft:`${scrollbar.thumbLeft}px`}}></div></div>
             </div>
         </div>
         <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleLevelFile} style={{display:'none'}} />
         <audio
-            ref={audioRef}
+            ref={audioElementRef}
             data-testid="editor-audio"
             src={song || undefined}
             preload="auto"
             style={{display:'none'}}
-            onCanPlayThrough={event => {
-                if (mediaSourceMatches(event.currentTarget.currentSrc, song, window.location.href)) audioTask.complete()
-            }}
+            onCanPlayThrough={event => completeAudio(event.currentTarget)}
             onPlaying={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
             onWaiting={() => setPlaying(false)}
             onEnded={() => setPlaying(false)}
-            onError={event => {
-                if (!mediaSourceMatches(event.currentTarget.currentSrc, song, window.location.href)) return
-                audioTask.fail(createRuntimeAssetFailure(song, new Error('Editor audio failed to decode.')))
-            }}
+            onError={event => failAudio(event.currentTarget)}
         ></audio>
     </div>
 }

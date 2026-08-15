@@ -136,77 +136,120 @@ export function MsArrToRsArr(ms:Msprite[]):Rsprite[]{
     return ms.map(v => MsToRs(v)) as Rsprite[]
 }
 
+type CollisionShape = Pick<Msprite, 'position' | 'anchor' | 'width' | 'height' | 'hitbox'>
+
+export type SpriteBounds = {
+    left:number
+    right:number
+    top:number
+    bottom:number
+    width:number
+    height:number
+}
+
+function hitboxDimension(size:number, ratio:number | undefined) {
+    return size * (Number.isFinite(ratio) && (ratio as number) >= 0 ? ratio as number : 1)
+}
+
+export function getSpriteHitboxBounds(sprite:CollisionShape, position = sprite.position):SpriteBounds {
+    const width = hitboxDimension(sprite.width, sprite.hitbox?.[0])
+    const height = hitboxDimension(sprite.height, sprite.hitbox?.[1])
+    const left = position[0] - sprite.anchor[0] * width
+    const top = position[1] - sprite.anchor[1] * height
+    return { left, right:left + width, top, bottom:top + height, width, height }
+}
+
+function boundsOverlap(first:SpriteBounds, second:SpriteBounds) {
+    return first.left < second.right
+        && first.right > second.left
+        && first.top < second.bottom
+        && first.bottom > second.top
+}
+
+function rangesOverlap(firstStart:number, firstEnd:number, secondStart:number, secondEnd:number) {
+    return firstStart < secondEnd && firstEnd > secondStart
+}
+
 export function checkCollisionWithPos(pos:[number, number], sp1:Msprite, sp2:Msprite):boolean{
-    const x1 = pos[0] - (sp1.anchor[0]) * sp1.width;
-    const y1 = pos[1] - (sp1.anchor[1]) * sp1.height;
-    const w1 = sp1.width;
-    const h1 = sp1.height;
-    
-    const x2 = sp2.position[0] - (sp2.anchor[0]) * sp2.width;
-    const y2 = sp2.position[1] - (sp2.anchor[1]) * sp2.height;
-    const w2 = sp2.width;
-    const h2 = sp2.height;
-    
-    return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2
+    return boundsOverlap(getSpriteHitboxBounds(sp1, pos), getSpriteHitboxBounds(sp2))
 }
 
 export function checkCollision(sp1:Msprite, sp2:Msprite):boolean{
-    const x1 = sp1.position[0] + sp1.dposition[0] - sp1.anchor[0] * sp1.width;
-    const y1 = sp1.position[1] + sp1.dposition[1] - sp1.anchor[1] * sp1.height;
-    const w1 = sp1.width;
-    const h1 = sp1.height;
-
-    const x2 = sp2.position[0] - sp2.anchor[0] * sp2.width;
-    const y2 = sp2.position[1] - sp2.anchor[1] * sp2.height;
-    const w2 = sp2.width;
-    const h2 = sp2.height;
-
-    return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2
+    return checkCollisionWithPos([
+        sp1.position[0] + sp1.dposition[0],
+        sp1.position[1] + sp1.dposition[1],
+    ], sp1, sp2)
 }
 
 export function initCollidedPosition(_me: Msprite, _sprites: Msprite[]): Msprite {
-    const _m: Msprite = {
+    const actor: Msprite = {
         ..._me,
         position:[..._me.position],
         dposition:[..._me.dposition],
-    };
-    const _c = _sprites;
-    const _colcond: boolean = !_c.map(v => v.isCollision && checkCollision(_m, v)).includes(true)
-    _c.forEach((_sp: Msprite) => {
-        if (_sp.isCollision) {
-            if(checkCollisionWithPos([_m.position[0] + _m.dposition[0], _m.position[1]], _m, _sp)) {
-                if (_m.dposition[0] > 0) {
-                    _m.position[0] = _sp.position[0] - _m.anchor[0] * _m.width - _sp.anchor[0] * _sp.width
-                } else if (_m.dposition[0] < 0) {
-                    _m.position[0] = _sp.position[0] + _sp.anchor[0] * _sp.width + _m.anchor[0] * _m.width
-                }
-                _m.dposition[0] = 0
-                _m.position[1] += _m.dposition[1]
-            }
-            if (checkCollisionWithPos([_m.position[0], _m.position[1] + _m.dposition[1]], _m, _sp)) {
-                if (_m.dposition[1] > 0) {
-                    _m.position[1] = _sp.position[1] - _m.anchor[1] * _m.height - _sp.anchor[1] * _sp.height
-                    _m.isGround = true
-                } else if (_m.dposition[1] < 0) {
-                    _m.position[1] = _sp.position[1] + _sp.anchor[1] * _sp.height + _m.anchor[1] * _m.height
-                }
-                _m.dposition[1] = 0
-                _m.position[0] += _m.dposition[0]
-            }
-        }
-    })
-    if(!_c.map((_sp: Msprite) => {
-        if (_sp.isCollision) {
-            if(checkCollisionWithPos([_m.position[0], _m.position[1]+1], _m, _sp)){
-                return false
-            } else return true
-        } else return true
-    }).includes(false)) _m.isGround = false
-    if (_colcond) {
-        _m.position[0] += _m.dposition[0]
-        _m.position[1] += _m.dposition[1]
     }
-    return _m;
+    const colliders = _sprites.filter(sprite => sprite.isCollision)
+    const actorSize = getSpriteHitboxBounds(actor)
+    const start:[number, number] = [...actor.position]
+
+    const horizontalVelocity = actor.dposition[0]
+    const horizontalStart = getSpriteHitboxBounds(actor, start)
+    actor.position[0] += horizontalVelocity
+    let collidedHorizontally = false
+    for (const collider of colliders) {
+        const target = getSpriteHitboxBounds(actor)
+        const obstacle = getSpriteHitboxBounds(collider)
+        if (!rangesOverlap(target.top, target.bottom, obstacle.top, obstacle.bottom)) continue
+        const crossedRight = horizontalVelocity > 0
+            && horizontalStart.right <= obstacle.left
+            && target.right >= obstacle.left
+        const crossedLeft = horizontalVelocity < 0
+            && horizontalStart.left >= obstacle.right
+            && target.left <= obstacle.right
+        const embeddedFromLeft = horizontalVelocity > 0 && boundsOverlap(target, obstacle) && horizontalStart.left < obstacle.left
+        const embeddedFromRight = horizontalVelocity < 0 && boundsOverlap(target, obstacle) && horizontalStart.right > obstacle.right
+        if (crossedRight || embeddedFromLeft) {
+            actor.position[0] = Math.min(actor.position[0], obstacle.left - (1 - actor.anchor[0]) * actorSize.width)
+            collidedHorizontally = true
+        } else if (crossedLeft || embeddedFromRight) {
+            actor.position[0] = Math.max(actor.position[0], obstacle.right + actor.anchor[0] * actorSize.width)
+            collidedHorizontally = true
+        }
+    }
+    if (collidedHorizontally) actor.dposition[0] = 0
+
+    const verticalVelocity = actor.dposition[1]
+    const verticalStartPosition:[number, number] = [actor.position[0], start[1]]
+    const verticalStart = getSpriteHitboxBounds(actor, verticalStartPosition)
+    actor.position[1] += verticalVelocity
+    actor.isGround = false
+    for (const collider of colliders) {
+        const target = getSpriteHitboxBounds(actor)
+        const obstacle = getSpriteHitboxBounds(collider)
+        if (!rangesOverlap(target.left, target.right, obstacle.left, obstacle.right)) continue
+        const crossedDown = verticalVelocity > 0
+            && verticalStart.bottom <= obstacle.top
+            && target.bottom >= obstacle.top
+        const crossedUp = verticalVelocity < 0
+            && verticalStart.top >= obstacle.bottom
+            && target.top <= obstacle.bottom
+        const embeddedFromAbove = verticalVelocity > 0 && boundsOverlap(target, obstacle) && verticalStart.top < obstacle.top
+        const embeddedFromBelow = verticalVelocity < 0 && boundsOverlap(target, obstacle) && verticalStart.bottom > obstacle.bottom
+        if (crossedDown || embeddedFromAbove) {
+            actor.position[1] = Math.min(actor.position[1], obstacle.top - (1 - actor.anchor[1]) * actorSize.height)
+            actor.isGround = true
+            actor.dposition[1] = 0
+        } else if (crossedUp || embeddedFromBelow) {
+            actor.position[1] = Math.max(actor.position[1], obstacle.bottom + actor.anchor[1] * actorSize.height)
+            actor.dposition[1] = 0
+        }
+    }
+
+    if (!actor.isGround) {
+        actor.isGround = colliders.some(collider => (
+            checkCollisionWithPos([actor.position[0], actor.position[1] + 0.5], actor, collider)
+        ))
+    }
+    return actor
 }
 
 export function playerToMsprite(_player:player){

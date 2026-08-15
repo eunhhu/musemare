@@ -1,14 +1,11 @@
-'use client'
-
-import { useContext } from "react"
 import { useRuntimeRoute } from '../components/RuntimeStatus'
-import { globalContext } from "../main"
+import { useGameSession } from '../components/GameSession'
 import { toLang } from "../data/lang"
 import { useSceneFade } from "../hooks/useSceneFade"
 
 export default function Index(){
-    const {lang, setScene} = useContext(globalContext)
-    const { style, transitionTo } = useSceneFade(setScene)
+    const { lang, navigate } = useGameSession()
+    const { style, transitionTo } = useSceneFade(navigate)
     useRuntimeRoute('credits')
 
     return <div style={style} className="Credits fullscreen blackbg">
@@ -33,6 +30,6 @@ export default function Index(){
                 </div>
             </div>
         </div>
-        <div className="goback" onClick={() => transitionTo('MainMenu')}>{toLang(lang, 'goback')}</div>
+        <button type="button" className="goback" onClick={() => transitionTo('MainMenu')}>{toLang(lang, 'goback')}</button>
     </div>
 }

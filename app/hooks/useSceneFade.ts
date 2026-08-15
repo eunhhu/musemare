@@ -1,10 +1,8 @@
-'use client'
-
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const fadeDuration = 250
 
-export function useSceneFade(setScene: (scene: string) => void) {
+export function useSceneFade<Scene extends string>(setScene: (scene: Scene) => void) {
     const [brightness, setBrightness] = useState(0)
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -18,7 +16,7 @@ export function useSceneFade(setScene: (scene: string) => void) {
         }
     }, [])
 
-    const transitionTo = useCallback((scene: string) => {
+    const transitionTo = useCallback((scene: Scene) => {
         if (timeoutRef.current) {
             return
         }

@@ -1,5 +1,3 @@
-'use client'
-
 import { Application, type ApplicationRef } from '@pixi/react'
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import type { Application as PixiApplication } from 'pixi.js'

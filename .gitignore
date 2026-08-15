@@ -11,18 +11,19 @@
 /playwright-report/
 /blob-report/
 
-# next.js
-/.next/
-/out/
+# vite
+/dist/
 
 # production
 /build
+/MuseMare Setup.exe
 
 # misc
 .DS_Store
 *.pem
 
 # debug
+bun-error.log*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -36,7 +37,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # generated styles
 /app/globals.css
